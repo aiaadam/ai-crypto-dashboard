@@ -215,16 +215,21 @@ ml_interval = None
 
 def load_model():
     global ml_model, ml_feature_cols, ml_interval
-    if not os.path.exists(MODEL_PATH):
-        print(f"[ML] Model file not found at {MODEL_PATH}")
-        return
-    bundle = joblib.load(MODEL_PATH)
-    ml_model = bundle["model"]
-    ml_feature_cols = bundle["feature_cols"]
-    ml_interval = bundle["interval"]
-    print(f"[ML] Loaded model from {MODEL_PATH} (interval={ml_interval})")
-
-
+    try:
+        if not os.path.exists(MODEL_PATH):
+            print(f"[ML] Model file not found at {MODEL_PATH} - skipping ML load")
+            return
+        bundle = joblib.load(MODEL_PATH)
+        ml_model = bundle["model"]
+        ml_feature_cols = bundle["feature_cols"]
+        ml_interval = bundle["interval"]
+        print(f"[ML] Loaded model from {MODEL_PATH} (interval={ml_interval})")
+    except Exception as e:
+        print(f"[ML] Failed to load model: {e}")
+        ml_model = None
+        ml_feature_cols = None
+        ml_interval = None
+        
 load_model()
 
 
