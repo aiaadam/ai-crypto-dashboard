@@ -4,3 +4,10 @@ pandas
 numpy
 requests
 ta
+fastapi
+uvicorn[standard]
+pandas
+ta
+joblib
+requests
+python-multipart
