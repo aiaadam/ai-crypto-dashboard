@@ -33,12 +33,7 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 @app.get("/", include_in_schema=False)
 def serve_dashboard():
-    print(">>>> HIT / ROUTE <<<<")
-    return FileResponse(
-        r"C:\Users\aadam\Desktop\ai-crypto-dashboard\frontend\dashboard.html",
-        media_type="text/html"
-    )
-
+    return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
 @app.get("/__test")
 def test_route():
@@ -229,7 +224,7 @@ def load_model():
         ml_model = None
         ml_feature_cols = None
         ml_interval = None
-        
+
 load_model()
 
 
