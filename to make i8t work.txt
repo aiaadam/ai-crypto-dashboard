@@ -1,0 +1,92 @@
+to make it work or turn on paste:
+
+cd %USERPROFILE%\Desktop\ai-crypto-dashboard\backend
+python -m pip install -r requirements.txt
+
+
+cd %USERPROFILE%\Desktop\ai-crypto-dashboard\backend
+python -m uvicorn main:app --reload
+
+
+after doing this to use the website do:
+
+1. Make sure backend is running
+In Command Prompt:
+
+text
+cd %USERPROFILE%\Desktop\ai-crypto-dashboard\backend
+python -m uvicorn main:app --reload
+Leave that window open.
+
+Then open dashboard.html in your browser.
+
+2. Choose the crypto and timeframe
+On the website:
+
+In the Symbol box (top left of the controls), type the Binance pair, for example:
+
+BTCUSDT
+
+ETHUSDT
+
+SOLUSDT
+
+In Interval, choose:
+
+1m → super short‑term scalping
+
+5m / 15m → intraday
+
+1h / 4h → swing
+
+Click Sync AI with chart.
+
+This calls:
+
+text
+http://127.0.0.1:8000/crypto/<SYMBOL>?interval=<INTERVAL>
+and gets the last candles + RSI + EMA + BUY/SELL/HOLD array.
+
+3. Read the AI signal
+On the right AI panel:
+
+Big badge:
+
+If it shows BUY in green → AI thinks conditions are good to buy (RSI < 30 and price above EMA).
+
+If it shows SELL in red → AI thinks conditions are overbought (RSI > 70).
+
+If it shows HOLD in grey → no strong signal.
+
+Under that:
+
+Symbol → which pair the signal is for (e.g. BTCUSDT).
+
+Interval → timeframe used (must match what you chose).
+
+Last updated → time of the latest candle used to generate the signal.
+
+Below that:
+
+Recent signals → list of the last ~20 signals with timestamps, so you can see if it’s flipping a lot or staying in one direction.
+
+4. Keep it updating
+By default, Auto‑refresh: ON (30s). That means every 30 seconds it:
+
+Hits your backend again.
+
+Updates the BUY/SELL/HOLD and the history list.
+
+You can click the Auto‑refresh button to turn it OFF if you just want manual updates.
+
+So the basic flow:
+
+Start backend.
+
+Open dashboard.html.
+
+Type symbol (e.g. BTCUSDT), pick interval (e.g. 1h).
+
+Hit Sync AI with chart.
+
+Watch the AI badge and recent signals to see current BUY/SELL/HOLD for that setup.
