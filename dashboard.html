@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Crypto Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #020617; }
+    .watermark {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 0;
+      font-size: clamp(4rem, 12vw, 10rem);
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      color: rgba(148, 163, 184, 0.05);
+      text-transform: uppercase;
+      user-select: none;
+    }
+    .content-layer {
+      position: relative;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-100">
+  <div class="watermark">AI_Aadam</div>
+
+  <div class="content-layer">
+    <div class="max-w-6xl mx-auto py-4 px-4 space-y-4">
+      <!-- Header -->
+      <header class="flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">AI Crypto Dashboard</h1>
+          <p class="text-slate-400 text-sm">
+            TradingView chart + AI signals (rules + ML) from your Python backend
+          </p>
+        </div>
+        <div class="text-xs text-slate-500">
+          Backend: local
+        </div>
+      </header>
+
+      <!-- Controls -->
+      <section class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3 flex flex-wrap gap-3 items-end">
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">Symbol</label>
+          <input
+            id="symbolInput"
+            type="text"
+            value="BTCUSDT"
+            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono w-32 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">Interval (rules)</label>
+          <select
+            id="intervalSelect"
+            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="1h" selected>1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
+
+        <button
+          id="updateBtn"
+          class="bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold px-4 py-2 rounded-lg transition"
+        >
+          Sync AI with chart
+        </button>
+
+        <p class="text-xs text-slate-500 ml-auto">
+          TradingView chart symbol must match your backend symbol (e.g. BINANCE:BTCUSDT).
+        </p>
+      </section>
+
+      <!-- Main grid: chart + AI + risk -->
+      <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- TradingView chart -->
+        <div class="lg:col-span-2 bg-slate-900/60 border border-slate-700/60 rounded-xl p-2">
+          <div class="tradingview-widget-container" style="height: 540px;">
+            <div id="tradingview_chart" style="height: 100%;"></div>
+            <div class="text-[10px] text-slate-500 mt-1">
+              Charts by
+              <a href="https://www.tradingview.com" rel="noopener nofollow" target="_blank" class="underline">
+                TradingView
+              </a>
+            </div>
+            <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+            <script type="text/javascript">
+              let tvWidget;
+              function initTradingView() {
+                tvWidget = new TradingView.widget({
+                  "width": "100%",
+                  "height": 520,
+                  "symbol": "BINANCE:BTCUSDT",
+                  "interval": "60",
+                  "timezone": "Etc/UTC",
+                  "theme": "dark",
+                  "style": "1",
+                  "locale": "en",
+                  "toolbar_bg": "#020617",
+                  "enable_publishing": false,
+                  "allow_symbol_change": true,
+                  "container_id": "tradingview_chart"
+                });
+              }
+              document.addEventListener("DOMContentLoaded", initTradingView);
+            </script>
+          </div>
+        </div>
+
+        <!-- AI Signal panel -->
+        <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-4">
+          <div>
+            <h2 class="text-sm font-semibold mb-1">AI Signal</h2>
+            <p class="text-xs text-slate-400 mb-2">
+              Rule-based signals (RSI + EMA + MACD + Bollinger) and ML prediction on Binance OHLC data.
+            </p>
+
+            <!-- Rule-based signal badge -->
+            <div id="signalBadge" class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600">
+              <span class="h-2 w-2 rounded-full bg-slate-500" id="signalDot"></span>
+              <span class="text-xs uppercase tracking-wide" id="signalText">No data</span>
+            </div>
+
+            <!-- ML prediction badge -->
+            <div id="mlBadge" class="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600">
+              <span class="h-2 w-2 rounded-full bg-slate-500" id="mlDot"></span>
+              <span class="text-[10px] uppercase tracking-wide text-slate-300">ML:</span>
+              <span class="text-xs uppercase tracking-wide" id="mlText">No prediction</span>
+            </div>
+
+            <div class="mt-3 text-xs text-slate-400 space-y-1">
+              <div>Symbol: <span id="aiSymbol" class="font-mono text-slate-100">–</span></div>
+              <div>Interval (rules): <span id="aiInterval" class="font-mono text-slate-100">–</span></div>
+              <div>Last updated: <span id="aiUpdated" class="font-mono text-slate-100">–</span></div>
+            </div>
+          </div>
+
+          <div class="border-t border-slate-700/70 pt-3">
+            <h3 class="text-xs font-semibold text-slate-300 mb-1">Recent signals</h3>
+            <div id="signalHistory" class="space-y-1 max-h-40 overflow-y-auto text-xs text-slate-300 font-mono">
+              <div class="text-slate-500">No history yet.</div>
+            </div>
+          </div>
+
+          <button
+            id="autoToggle"
+            class="mt-auto text-xs px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 transition self-start"
+          >
+            Auto-refresh: ON (30s)
+          </button>
+        </div>
+
+        <!-- Risk / Position Size panel -->
+        <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-3">
+          <div>
+            <h2 class="text-sm font-semibold mb-1">Risk & Position Size</h2>
+            <p class="text-xs text-slate-400">
+              Calculate position size based on account size, risk %, entry, and stop.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Account size ($)</label>
+              <input
+                id="riskAccount"
+                type="number"
+                value="1000"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Risk per trade (%)</label>
+              <input
+                id="riskPercent"
+                type="number"
+                value="1"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Entry price</label>
+              <input
+                id="riskEntry"
+                type="number"
+                step="0.0001"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Stop loss price</label>
+              <input
+                id="riskStop"
+                type="number"
+                step="0.0001"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          <button
+            id="riskCalcBtn"
+            class="mt-1 bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition self-start"
+          >
+            Calculate position
+          </button>
+
+          <div class="mt-1 text-xs text-slate-300 space-y-1">
+            <div>Max risk: <span id="riskDollar" class="font-mono text-emerald-300">–</span></div>
+            <div>Position size (coins): <span id="riskSize" class="font-mono text-emerald-300">–</span></div>
+            <div>Notional size ($): <span id="riskNotional" class="font-mono text-slate-200">–</span></div>
+          </div>
+
+          <p class="mt-1 text-[10px] text-slate-500">
+            Size = (Account × Risk%) ÷ |Entry − Stop|. Assumes 1x spot (no leverage).
+          </p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Bottom-right credits box -->
+  <div class="fixed bottom-4 right-4 z-20 text-[10px] text-slate-400 space-y-1 text-right">
+    <div class="text-xs font-semibold text-slate-300">
+      Created by <span class="text-emerald-400">aadam</span>
+    </div>
+    <div>
+      TikTok:
+      <a href="https://www.tiktok.com/@ai_aadam"
+         target="_blank"
+         rel="noopener noreferrer"
+         class="underline hover:text-emerald-400">
+        @ai_aadam
+      </a>
+    </div>
+    <div>
+      Donate:
+      <a href="https://www.paypal.com/paypalme/Aadam800"
+         target="_blank"
+         rel="noopener noreferrer"
+         class="underline hover:text-emerald-400">
+        paypal.me/Aadam800
+      </a>
+    </div>
+  </div>
+
+  <script>
+    const apiBase = "";
+
+    const symbolInput = document.getElementById("symbolInput");
+    const intervalSelect = document.getElementById("intervalSelect");
+    const updateBtn = document.getElementById("updateBtn");
+
+    const signalBadge = document.getElementById("signalBadge");
+    const signalDot = document.getElementById("signalDot");
+    const signalText = document.getElementById("signalText");
+    const aiSymbol = document.getElementById("aiSymbol");
+    const aiInterval = document.getElementById("aiInterval");
+    const aiUpdated = document.getElementById("aiUpdated");
+    const signalHistory = document.getElementById("signalHistory");
+    const autoToggle = document.getElementById("autoToggle");
+
+    const mlBadge = document.getElementById("mlBadge");
+    const mlDot = document.getElementById("mlDot");
+    const mlText = document.getElementById("mlText");
+
+    const riskAccount = document.getElementById("riskAccount");
+    const riskPercent = document.getElementById("riskPercent");
+    const riskEntry = document.getElementById("riskEntry");
+    const riskStop = document.getElementById("riskStop");
+    const riskCalcBtn = document.getElementById("riskCalcBtn");
+    const riskDollar = document.getElementById("riskDollar");
+    const riskSize = document.getElementById("riskSize");
+    const riskNotional = document.getElementById("riskNotional");
+
+    let autoOn = true;
+    let autoTimer = null;
+
+    function formatTimestamp(tsSeconds) {
+      if (!tsSeconds) return "–";
+      const d = new Date(tsSeconds * 1000);
+      return d.toLocaleString();
+    }
+
+    function updateSignalUI(data) {
+      const signals = data.signal;
+      if (!signals || !signals.length) {
+        signalText.textContent = "No data";
+        signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600";
+        signalDot.className = "h-2 w-2 rounded-full bg-slate-500";
+        aiSymbol.textContent = data.symbol || "–";
+        aiInterval.textContent = data.interval || "–";
+        aiUpdated.textContent = "–";
+        signalHistory.innerHTML = '<div class="text-slate-500">No history yet.</div>';
+        return;
+      }
+
+      const lastSignal = signals[signals.length - 1];
+      const lastTime = data.time[data.time.length - 1];
+
+      signalText.textContent = lastSignal;
+
+      signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full border";
+      if (lastSignal === "BUY") {
+        signalBadge.classList.add("bg-emerald-500/10", "border-emerald-500/60", "text-emerald-300");
+        signalDot.className = "h-2 w-2 rounded-full bg-emerald-400";
+      } else if (lastSignal === "SELL") {
+        signalBadge.classList.add("bg-rose-500/10", "border-rose-500/60", "text-rose-300");
+        signalDot.className = "h-2 w-2 rounded-full bg-rose-400";
+      } else {
+        signalBadge.classList.add("bg-slate-700/40", "border-slate-500/60", "text-slate-100");
+        signalDot.className = "h-2 w-2 rounded-full bg-slate-400";
+      }
+
+      aiSymbol.textContent = data.symbol || "–";
+      aiInterval.textContent = data.interval || "–";
+      aiUpdated.textContent = formatTimestamp(lastTime);
+
+      const items = [];
+      const len = Math.min(signals.length, 20);
+      for (let i = 0; i < len; i++) {
+        const s = signals[signals.length - 1 - i];
+        const t = data.time[data.time.length - 1 - i];
+        const color =
+          s === "BUY"
+            ? "text-emerald-300"
+            : s === "SELL"
+            ? "text-rose-300"
+            : "text-slate-300";
+        items.push(
+          `<div class="flex justify-between gap-2">
+             <span class="${color}">${s}</span>
+             <span class="text-slate-500">${formatTimestamp(t)}</span>
+           </div>`
+        );
+      }
+      signalHistory.innerHTML = items.join("");
+    }
+
+    function updateMlUI(prediction) {
+      const p = prediction || "HOLD";
+
+      mlBadge.className = "mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full border";
+      if (p === "BUY") {
+        mlBadge.classList.add("bg-emerald-500/10", "border-emerald-500/60", "text-emerald-300");
+        mlDot.className = "h-2 w-2 rounded-full bg-emerald-400";
+      } else if (p === "SELL") {
+        mlBadge.classList.add("bg-rose-500/10", "border-rose-500/60", "text-rose-300");
+        mlDot.className = "h-2 w-2 rounded-full bg-rose-400";
+      } else {
+        mlBadge.classList.add("bg-slate-700/40", "border-slate-500/60", "text-slate-100");
+        mlDot.className = "h-2 w-2 rounded-full bg-slate-400";
+      }
+
+      mlText.textContent = p;
+    }
+
+    async function fetchSignals() {
+      const symbol = symbolInput.value.trim().toUpperCase();
+      const interval = intervalSelect.value;
+      const url = `${apiBase}/crypto/${symbol}?interval=${interval}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("API error " + res.status);
+      return res.json();
+    }
+
+    async function fetchMlPrediction() {
+      const symbol = symbolInput.value.trim().toUpperCase();
+      const url = `${apiBase}/predict/${symbol}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("ML API error " + res.status);
+      return res.json();
+    }
+
+    async function refreshSignals() {
+      try {
+        updateBtn.disabled = true;
+        updateBtn.textContent = "Loading...";
+        const [data, ml] = await Promise.all([
+          fetchSignals(),
+          fetchMlPrediction(),
+        ]);
+        updateSignalUI(data);
+        updateMlUI(ml.prediction);
+      } catch (err) {
+        console.error(err);
+        signalText.textContent = "Error";
+        signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/60 text-rose-300";
+        signalDot.className = "h-2 w-2 rounded-full bg-rose-400";
+        updateMlUI("HOLD");
+      } finally {
+        updateBtn.disabled = false;
+        updateBtn.textContent = "Sync AI with chart";
+      }
+    }
+
+    function startAuto() {
+      if (autoTimer) clearInterval(autoTimer);
+      autoTimer = setInterval(() => {
+        if (autoOn) refreshSignals();
+      }, 30000);
+    }
+
+    autoToggle.addEventListener("click", () => {
+      autoOn = !autoOn;
+      if (autoOn) {
+        autoToggle.textContent = "Auto-refresh: ON (30s)";
+        autoToggle.classList.remove("bg-slate-800");
+        startAuto();
+      } else {
+        autoToggle.textContent = "Auto-refresh: OFF";
+        autoToggle.classList.add("bg-slate-800");
+      }
+    });
+
+    updateBtn.addEventListener("click", refreshSignals);
+    symbolInput.addEventListener("keyup", (e) => {
+      if (e.key === "Enter") refreshSignals();
+    });
+
+    function calcRisk() {
+      const account = parseFloat(riskAccount.value);
+      const pct = parseFloat(riskPercent.value);
+      const entry = parseFloat(riskEntry.value);
+      const stop = parseFloat(riskStop.value);
+
+      if (!account || !pct || !entry || !stop || entry === stop) {
+        alert("Fill account, risk %, entry and stop (entry ≠ stop).");
+        return;
+      }
+
+      const riskPerTrade = (account * pct) / 100;
+      const riskPerCoin = Math.abs(entry - stop);
+      const size = riskPerTrade / riskPerCoin;
+      const notional = size * entry;
+
+      riskDollar.textContent = `$${riskPerTrade.toFixed(2)}`;
+      riskSize.textContent = size.toFixed(4);
+      riskNotional.textContent = `$${notional.toFixed(2)}`;
+    }
+
+    riskCalcBtn.addEventListener("click", calcRisk);
+
+    refreshSignals();
+    startAuto();
+  </script>
+</body>
+</html>
