@@ -35,6 +35,7 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 def serve_dashboard():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
+
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
