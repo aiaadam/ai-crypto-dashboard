@@ -10,6 +10,7 @@ import os
 import time
 from datetime import datetime, timedelta
 
+
 app = FastAPI(
     title="AI Crypto Dashboard",
     version="0.1.0",
@@ -70,6 +71,7 @@ INTERVAL_TO_DAYS = {
     "1d": 90,
 }
 
+
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
     symbol = symbol.upper()
     cg_id = SYMBOL_TO_COINGECKO_ID.get(symbol)
@@ -81,11 +83,14 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
     params = {
         "vs_currency": "usd",
         "days": days,
-        # CoinGecko auto-selects granularity; could add "interval": "hourly"/"daily" if needed
     }
 
     url = COINGECKO_OHLC_URL.format(id=cg_id)
     resp = requests.get(url, params=params)
+    if resp.status_code == 429:
+        # rate limited – return empty list instead of crashing
+        print("[Data] CoinGecko rate limit hit (429)")
+        return []
     resp.raise_for_status()
     raw = resp.json()
     # raw: [[timestamp_ms, open, high, low, close], ...]
@@ -163,6 +168,19 @@ def generate_signal(row):
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
     data = get_klines(symbol.upper(), interval=interval)
+
+    if not data:
+        return {
+            "time": [],
+            "open": [],
+            "high": [],
+            "low": [],
+            "close": [],
+            "signal": [],
+            "interval": interval,
+            "symbol": symbol.upper(),
+            "info": "No data (possibly rate limited by data provider)",
+        }
 
     df = pd.DataFrame(
         data,
@@ -329,6 +347,14 @@ def predict(symbol: str):
     interval = ml_interval or "15m"
 
     raw = get_klines(symbol.upper(), interval=interval, limit=300)
+    if not raw:
+        return {
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "prediction": "HOLD",
+            "info": "No data from provider (rate limited or unavailable)",
+        }
+
     df = pd.DataFrame(
         raw,
         columns=[
