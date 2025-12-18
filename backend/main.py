@@ -136,34 +136,36 @@ def generate_signal(row):
     uptrend = close > ema_200
     downtrend = close < ema_200
 
-    # Aggressive BUY logic
+    # More aggressive BUY logic
     if (
-        (uptrend or close >= ema_50)
-        and rsi < 60
-        and (macd > macd_signal or close <= bb_low * 1.02)
-        and (vol >= 0.7 * vol_ma)
+        uptrend                              # price above 200 EMA
+        and rsi < 65                         # allow higher RSI
+        and macd > macd_signal               # MACD bullish
+        and close <= bb_low * 1.01           # near/below lower band
+        and vol >= 0.5 * vol_ma              # lower volume requirement
     ):
         return "BUY"
 
     if (
         close > ema_50
         and macd > macd_signal
-        and vol >= 1.2 * vol_ma
+        and vol >= 0.8 * vol_ma              # lower from 1.2x
     ):
         return "BUY"
 
-    # SELL logic
+    # More aggressive SELL logic
     if (
         downtrend
-        and rsi > 40
-        and (macd < macd_signal or close >= bb_high * 0.98)
+        and rsi > 35                         # allow lower RSI
+        and macd < macd_signal               # MACD bearish
+        and close >= bb_high * 0.99          # near upper band
     ):
         return "SELL"
 
     if (
-        rsi > 70
+        rsi > 65                             # lower from 70
         and close >= bb_high
-        and vol >= 1.5 * vol_ma
+        and vol >= 1.1 * vol_ma              # lower from 1.5x
     ):
         return "SELL"
 
@@ -239,12 +241,10 @@ def crypto(symbol: str, interval: str = Query("1h")):
 
     df["vol_ma_20"] = df["volume"].rolling(20).mean()
 
-    # NEW: keep rows, fill indicator NaNs instead of dropping everything
-    df[["rsi", "ema_50", "ema_200", "macd", "macd_signal",
-        "bb_high", "bb_low", "vol_ma_20"]] = df[[
-            "rsi", "ema_50", "ema_200", "macd", "macd_signal",
-            "bb_high", "bb_low", "vol_ma_20"
-        ]].fillna(method="bfill").fillna(method="ffill")
+    # keep rows, fill indicator NaNs instead of dropping everything
+    cols = ["rsi", "ema_50", "ema_200", "macd", "macd_signal",
+            "bb_high", "bb_low", "vol_ma_20"]
+    df[cols] = df[cols].bfill().ffill()
 
     df["signal"] = df.apply(generate_signal, axis=1)
 
