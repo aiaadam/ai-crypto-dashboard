@@ -10,6 +10,7 @@ import os
 import time
 from datetime import datetime, timedelta
 
+
 app = FastAPI(
     title="AI Crypto Dashboard",
     version="0.1.0",
@@ -39,13 +40,16 @@ print("FRONTEND_DIR:", FRONTEND_DIR)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
+
 @app.get("/", include_in_schema=False)
 def serve_dashboard():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
+
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
+
 
 # -------------------------------
 # CoinGecko data fetch (replaces Binance)
@@ -61,15 +65,17 @@ SYMBOL_TO_COINGECKO_ID = {
     # add more here if needed
 }
 
-# Rough mapping of your requested interval to "days" window
+# Rough mapping of your requested interval to allowed CoinGecko "days" values
+# Allowed days: 1, 7, 14, 30, 90, 180, 365, max [web:198][web:204]
 INTERVAL_TO_DAYS = {
     "1m": 1,
-    "5m": 2,
-    "15m": 3,
-    "1h": 7,    # 7 days of hourly candles
-    "4h": 30,
-    "1d": 90,
+    "5m": 1,
+    "15m": 1,
+    "1h": 7,
+    "4h": 14,
+    "1d": 30,
 }
+
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
     symbol = symbol.upper()
@@ -90,10 +96,12 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
 
     url = COINGECKO_OHLC_URL.format(id=cg_id)
     resp = requests.get(url, params=params, headers=headers)
-    if resp.status_code == 429:
-        # rate limited – return empty list instead of crashing
-        print("[Data] CoinGecko rate limit hit (429)")
+
+    # handle common errors without crashing
+    if resp.status_code in (400, 401, 403, 404, 429, 500, 503):
+        print(f"[Data] CoinGecko error {resp.status_code} for {url}")
         return []
+
     resp.raise_for_status()
     raw = resp.json()
     # raw: [[timestamp_ms, open, high, low, close], ...]
@@ -113,6 +121,7 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
         ])
 
     return klines
+
 
 # -------------------------------
 # Rule-based signal
@@ -185,6 +194,7 @@ def generate_signal(row, interval: str = "1h"):
 
     # fallback
     return "HOLD"
+
 
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
@@ -275,6 +285,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
         "symbol": symbol.upper(),
     }
 
+
 # -------------------------------
 # ML model: load + predict
 # -------------------------------
@@ -284,6 +295,7 @@ MODEL_PATH = "models/crypto_model.pkl"
 ml_model = None
 ml_feature_cols = None
 ml_interval = None
+
 
 def load_model():
     global ml_model, ml_feature_cols, ml_interval
@@ -302,7 +314,9 @@ def load_model():
         ml_feature_cols = None
         ml_interval = None
 
+
 load_model()
+
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -352,10 +366,12 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna()
     return df
 
+
 def map_label_to_signal(label: int) -> str:
     if label == -1:
         return "SELL"
     return "BUY"
+
 
 @app.get("/predict/{symbol}")
 def predict(symbol: str):
@@ -373,7 +389,7 @@ def predict(symbol: str):
 
     raw = get_klines(symbol.upper(), interval=interval, limit=300)
     if not raw:
-        # explicitly tell frontend it’s a data issue (often rate limit)
+        # explicitly tell frontend it’s a data issue (often rate limit or 4xx)
         return {
             "ok": False,
             "symbol": symbol.upper(),
