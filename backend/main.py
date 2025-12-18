@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta
 
 
+
 app = FastAPI(
     title="AI Crypto Dashboard",
     version="0.1.0",
@@ -19,12 +20,14 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+
 # CORS
 origins = [
     "https://aiautotrades.onrender.com",  # your frontend
     "http://localhost",
     "http://localhost:8000",
 ]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,11 +37,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # FRONTEND (optional static mount, safe to leave)
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 print("FRONTEND_DIR:", FRONTEND_DIR)
 
+
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
 
 
 @app.get("/", include_in_schema=False)
@@ -46,16 +52,20 @@ def serve_dashboard():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
 
+
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
+
 
 
 # -------------------------------
 # CoinGecko data fetch (replaces Binance)
 # -------------------------------
 
+
 COINGECKO_OHLC_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc"
+
 
 # Map your trading symbols to CoinGecko IDs
 SYMBOL_TO_COINGECKO_ID = {
@@ -64,12 +74,14 @@ SYMBOL_TO_COINGECKO_ID = {
     # add more here if needed
 }
 
+
 # Rough mapping of your requested interval to "days" window
 INTERVAL_TO_DAYS = {
     "1h": 7,    # 7 days of hourly candles
     "4h": 30,
     "1d": 90,
 }
+
 
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
@@ -112,9 +124,11 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
     return klines
 
 
+
 # -------------------------------
 # Rule-based signal
 # -------------------------------
+
 
 def generate_signal(row):
     close = row["close"]
@@ -165,12 +179,15 @@ def generate_signal(row):
     return "HOLD"
 
 
+
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
     data = get_klines(symbol.upper(), interval=interval)
 
     if not data:
+        # make it explicit so frontend can show a message
         return {
+            "ok": False,
             "time": [],
             "open": [],
             "high": [],
@@ -236,6 +253,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
     df["signal"] = df.apply(generate_signal, axis=1)
 
     return {
+        "ok": True,
         "time": df["time"].tolist(),
         "open": df["open"].tolist(),
         "high": df["high"].tolist(),
@@ -247,15 +265,19 @@ def crypto(symbol: str, interval: str = Query("1h")):
     }
 
 
+
 # -------------------------------
 # ML model: load + predict
 # -------------------------------
 
+
 MODEL_PATH = "models/crypto_model.pkl"
+
 
 ml_model = None
 ml_feature_cols = None
 ml_interval = None
+
 
 
 def load_model():
@@ -276,7 +298,9 @@ def load_model():
         ml_interval = None
 
 
+
 load_model()
+
 
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -328,16 +352,20 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
 def map_label_to_signal(label: int) -> str:
     if label == -1:
         return "SELL"
     return "BUY"
 
 
+
 @app.get("/predict/{symbol}")
 def predict(symbol: str):
+    # if model not loaded, be explicit
     if ml_model is None:
         return {
+            "ok": False,
             "symbol": symbol.upper(),
             "interval": ml_interval or "unknown",
             "prediction": "HOLD",
@@ -348,7 +376,9 @@ def predict(symbol: str):
 
     raw = get_klines(symbol.upper(), interval=interval, limit=300)
     if not raw:
+        # explicitly tell frontend it’s a data issue (often rate limit)
         return {
+            "ok": False,
             "symbol": symbol.upper(),
             "interval": interval,
             "prediction": "HOLD",
@@ -376,6 +406,7 @@ def predict(symbol: str):
 
     if len(df) == 0:
         return {
+            "ok": False,
             "symbol": symbol.upper(),
             "interval": interval,
             "prediction": "HOLD",
@@ -388,6 +419,7 @@ def predict(symbol: str):
     pred_signal = map_label_to_signal(label)
 
     return {
+        "ok": True,
         "symbol": symbol.upper(),
         "interval": interval,
         "prediction": pred_signal,
