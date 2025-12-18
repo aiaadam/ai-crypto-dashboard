@@ -7,29 +7,38 @@ import pandas as pd
 import ta
 import joblib
 import os
+import time
+from datetime import datetime, timedelta
 
 app = FastAPI(
     title="AI Crypto Dashboard",
     version="0.1.0",
-    docs_url="/docs",        # Swagger only at /docs
-    redoc_url=None,          # disable ReDoc so it doesn't take /
+    docs_url="/docs",
+    redoc_url=None,
     openapi_url="/openapi.json",
 )
 
 # CORS
+origins = [
+    "https://aiautotrades.onrender.com",  # your frontend
+    "http://localhost",
+    "http://localhost:8000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,      # not ["*"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# FRONTEND
+# FRONTEND (optional static mount, safe to leave)
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 print("FRONTEND_DIR:", FRONTEND_DIR)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
 
 @app.get("/", include_in_schema=False)
 def serve_dashboard():
@@ -41,23 +50,65 @@ def test_route():
     return {"msg": "this is the correct main.py"}
 
 
+# -------------------------------
+# CoinGecko data fetch (replaces Binance)
+# -------------------------------
 
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
+COINGECKO_OHLC_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc"
 
+# Map your trading symbols to CoinGecko IDs
+SYMBOL_TO_COINGECKO_ID = {
+    "BTCUSDT": "bitcoin",
+    "ETHUSDT": "ethereum",
+    # add more here if needed
+}
+
+# Rough mapping of your requested interval to "days" window
+INTERVAL_TO_DAYS = {
+    "1h": 7,    # 7 days of hourly candles
+    "4h": 30,
+    "1d": 90,
+}
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
+    symbol = symbol.upper()
+    cg_id = SYMBOL_TO_COINGECKO_ID.get(symbol)
+    if cg_id is None:
+        raise ValueError(f"Unsupported symbol for CoinGecko: {symbol}")
+
+    days = INTERVAL_TO_DAYS.get(interval, 7)
+
     params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
+        "vs_currency": "usd",
+        "days": days,
+        # CoinGecko auto-selects granularity; could add "interval": "hourly"/"daily" if needed
     }
-    response = requests.get(BINANCE_URL, params=params)
-    response.raise_for_status()
-    return response.json()
+
+    url = COINGECKO_OHLC_URL.format(id=cg_id)
+    resp = requests.get(url, params=params)
+    resp.raise_for_status()
+    raw = resp.json()
+    # raw: [[timestamp_ms, open, high, low, close], ...]
+
+    klines = []
+    for item in raw[-limit:]:
+        t, o, h, l, c = item
+        volume = 0.0  # CoinGecko OHLC doesn't include volume
+        klines.append([
+            t,
+            str(o),
+            str(h),
+            str(l),
+            str(c),
+            str(volume),
+            "0", "0", "0", "0", "0", "0",
+        ])
+
+    return klines
 
 
 # -------------------------------
-# RULE-BASED SIGNAL (VERY BUY-HEAVY)
+# Rule-based signal
 # -------------------------------
 
 def generate_signal(row):
@@ -75,25 +126,15 @@ def generate_signal(row):
     uptrend = close > ema_200
     downtrend = close < ema_200
 
-    # --- VERY AGGRESSIVE BUY LOGIC ---
-
-    # 1) Pullback in uptrend or sideways:
-    #    - Price not clearly in a downtrend
-    #    - RSI below 60 (slight dip)
-    #    - MACD turning up OR price near/below lower band
-    #    - Volume not dead (>= 0.7 of recent avg)
+    # Aggressive BUY logic
     if (
-        (uptrend or close >= ema_50)                      # allow uptrend + neutral
-        and rsi < 60                                     # very loose
+        (uptrend or close >= ema_50)
+        and rsi < 60
         and (macd > macd_signal or close <= bb_low * 1.02)
         and (vol >= 0.7 * vol_ma)
     ):
         return "BUY"
 
-    # 2) Breakout with volume:
-    #    - Close above ema_50
-    #    - MACD above signal
-    #    - Volume spike vs average
     if (
         close > ema_50
         and macd > macd_signal
@@ -101,9 +142,7 @@ def generate_signal(row):
     ):
         return "BUY"
 
-    # --- SELL LOGIC (still present but softer) ---
-
-    # 1) Bounce in downtrend:
+    # SELL logic
     if (
         downtrend
         and rsi > 40
@@ -111,7 +150,6 @@ def generate_signal(row):
     ):
         return "SELL"
 
-    # 2) Overbought spike with big volume
     if (
         rsi > 70
         and close >= bb_high
@@ -123,10 +161,7 @@ def generate_signal(row):
 
 
 @app.get("/crypto/{symbol}")
-def crypto(
-    symbol: str,
-    interval: str = Query("1h"),
-):
+def crypto(symbol: str, interval: str = Query("1h")):
     data = get_klines(symbol.upper(), interval=interval)
 
     df = pd.DataFrame(
@@ -154,14 +189,12 @@ def crypto(
     df["close"] = df["close"].astype(float)
     df["volume"] = df["volume"].astype(float)
 
-    # RSI (14)
+    # Indicators
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
 
-    # EMAs for trend (50 and 200)
     df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
     df["ema_200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
 
-    # MACD (12, 26, 9)
     macd_ind = ta.trend.MACD(
         close=df["close"],
         window_slow=26,
@@ -171,7 +204,6 @@ def crypto(
     df["macd"] = macd_ind.macd()
     df["macd_signal"] = macd_ind.macd_signal()
 
-    # Bollinger Bands (20, 2)
     bb_ind = ta.volatility.BollingerBands(
         close=df["close"],
         window=20,
@@ -180,7 +212,6 @@ def crypto(
     df["bb_high"] = bb_ind.bollinger_hband()
     df["bb_low"] = bb_ind.bollinger_lband()
 
-    # Volume moving average
     df["vol_ma_20"] = df["volume"].rolling(20).mean()
 
     df = df.dropna()
@@ -225,6 +256,7 @@ def load_model():
         ml_model = None
         ml_feature_cols = None
         ml_interval = None
+
 
 load_model()
 
@@ -279,7 +311,6 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def map_label_to_signal(label: int) -> str:
-    # BUY bias: anything not strongly negative = BUY
     if label == -1:
         return "SELL"
     return "BUY"
@@ -287,10 +318,6 @@ def map_label_to_signal(label: int) -> str:
 
 @app.get("/predict/{symbol}")
 def predict(symbol: str):
-    """
-    Use the trained ML model to predict next move (BUY/SELL)
-    for the given symbol on the interval the model was trained on.
-    """
     if ml_model is None:
         return {
             "symbol": symbol.upper(),
