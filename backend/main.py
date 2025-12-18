@@ -52,88 +52,70 @@ def test_route():
 
 
 # -------------------------------
-# Binance data fetch (klines)
+# CoinGecko data fetch (replaces Binance)
 # -------------------------------
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+COINGECKO_OHLC_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc"
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
-# Supported Binance intervals for klines
-BINANCE_INTERVALS = {
-    "1m": "1m",
-    "5m": "5m",
-    "15m": "15m",
-    "1h": "1h",
-    "4h": "4h",
-    "1d": "1d",
+# Map your trading symbols to CoinGecko IDs
+SYMBOL_TO_COINGECKO_ID = {
+    "BTCUSDT": "bitcoin",
+    "ETHUSDT": "ethereum",
+    # add more here if needed
+}
+
+# Rough mapping of your requested interval to allowed CoinGecko "days" values
+INTERVAL_TO_DAYS = {
+    "1m": 1,
+    "5m": 1,
+    "15m": 1,
+    "1h": 7,
+    "4h": 14,
+    "1d": 30,
 }
 
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
-    """
-    Fetch klines from Binance and return them in the same shape as before:
-    [
-      [open_time_ms, open, high, low, close, volume, ...],
-      ...
-    ]
-    """
     symbol = symbol.upper()
+    cg_id = SYMBOL_TO_COINGECKO_ID.get(symbol)
+    if cg_id is None:
+        raise ValueError(f"Unsupported symbol for CoinGecko: {symbol}")
 
-    # map requested interval to a valid Binance interval (fallback 1h)
-    interval = BINANCE_INTERVALS.get(interval, "1h")
+    days = INTERVAL_TO_DAYS.get(interval, 7)
 
     params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
+        "vs_currency": "usd",
+        "days": days,
     }
 
-    try:
-        resp = requests.get(BINANCE_KLINES_URL, params=params, timeout=10)
-    except Exception as e:
-        print(f"[Data] Binance request error for {symbol} {interval}: {e}")
-        return []
+    headers = {}
+    if COINGECKO_API_KEY:
+        headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
 
+    url = COINGECKO_OHLC_URL.format(id=cg_id)
+    resp = requests.get(url, params=params, headers=headers)
+
+    # handle common errors without crashing
     if resp.status_code in (400, 401, 403, 404, 429, 500, 503):
-        print(f"[Data] Binance error {resp.status_code} for {symbol} {interval}: {resp.text[:200]}")
+        print(f"[Data] CoinGecko error {resp.status_code} for {url}")
         return []
 
     resp.raise_for_status()
     raw = resp.json()
-    # Binance kline format:
-    # [
-    #   [
-    #     0 open time,
-    #     1 open,
-    #     2 high,
-    #     3 low,
-    #     4 close,
-    #     5 volume,
-    #     6 close time,
-    #     7 quote asset volume,
-    #     8 number of trades,
-    #     9 taker buy base asset volume,
-    #     10 taker buy quote asset volume,
-    #     11 ignore
-    #   ],
-    #   ...
-    # ]
+    # raw: [[timestamp_ms, open, high, low, close], ...]
 
     klines = []
-    for item in raw:
-        open_time = item[0]  # ms
-        o = item[1]
-        h = item[2]
-        l = item[3]
-        c = item[4]
-        v = item[5]
-        # Keep the same shape your DataFrame expects
+    for item in raw[-limit:]:
+        t, o, h, l, c = item
+        volume = 0.0  # CoinGecko OHLC doesn't include volume
         klines.append([
-            open_time,
+            t,
             str(o),
             str(h),
             str(l),
             str(c),
-            str(v),
+            str(volume),
             "0", "0", "0", "0", "0", "0",
         ])
 
