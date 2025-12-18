@@ -10,7 +10,6 @@ import os
 import time
 from datetime import datetime, timedelta
 
-
 app = FastAPI(
     title="AI Crypto Dashboard",
     version="0.1.0",
@@ -40,16 +39,13 @@ print("FRONTEND_DIR:", FRONTEND_DIR)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
-
 @app.get("/", include_in_schema=False)
 def serve_dashboard():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
-
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
-
 
 # -------------------------------
 # CoinGecko data fetch (replaces Binance)
@@ -65,9 +61,10 @@ SYMBOL_TO_COINGECKO_ID = {
     # add more here if needed
 }
 
-# Rough mapping of your requested interval to allowed CoinGecko "days" values
+# Mapping of requested interval → CoinGecko "days"
+# Shorter intervals use very small days windows so you get fresher / denser candles.
 INTERVAL_TO_DAYS = {
-    "1m": 1,
+    "1m": 1,     # last 1 day of candles
     "5m": 1,
     "15m": 1,
     "30m": 1,
@@ -75,7 +72,6 @@ INTERVAL_TO_DAYS = {
     "4h": 14,
     "1d": 30,
 }
-
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
     symbol = symbol.upper()
@@ -122,7 +118,6 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
 
     return klines
 
-
 # -------------------------------
 # Rule-based signal
 # -------------------------------
@@ -158,7 +153,6 @@ def generate_signal(row, interval: str = "1h"):
         band_hi_mult = 1.00
 
     # ---- BUY ----
-    # trend-following: price above EMAs + MACD up + RSI not too high
     if (
         uptrend
         and close > ema_50
@@ -167,7 +161,6 @@ def generate_signal(row, interval: str = "1h"):
     ):
         return "BUY"
 
-    # mean-reversion: dip near/below lower band with low-ish RSI
     if (
         rsi < rsi_buy_max
         and close <= bb_low * band_lo_mult
@@ -175,7 +168,6 @@ def generate_signal(row, interval: str = "1h"):
         return "BUY"
 
     # ---- SELL ----
-    # trend-following short: price below EMAs + MACD down + RSI not too low
     if (
         downtrend
         and close < ema_50
@@ -184,23 +176,22 @@ def generate_signal(row, interval: str = "1h"):
     ):
         return "SELL"
 
-    # mean-reversion: push near/above upper band with high-ish RSI
     if (
         rsi > rsi_sell_min
         and close >= bb_high * band_hi_mult
     ):
         return "SELL"
 
-    # fallback
     return "HOLD"
-
 
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
+    # Debug line so you can see what interval is actually used
+    print(f"[CRYPTO] symbol={symbol.upper()} interval={interval}")
+
     data = get_klines(symbol.upper(), interval=interval)
 
     if not data:
-        # make it explicit so frontend can show a message
         return {
             "ok": False,
             "time": [],
@@ -264,12 +255,10 @@ def crypto(symbol: str, interval: str = Query("1h")):
 
     df["vol_ma_20"] = df["volume"].rolling(20).mean()
 
-    # keep rows, fill indicator NaNs instead of dropping everything
     cols = ["rsi", "ema_50", "ema_200", "macd", "macd_signal",
             "bb_high", "bb_low", "vol_ma_20"]
     df[cols] = df[cols].bfill().ffill()
 
-    # pass interval into signal generator so rules adapt per TF
     df["signal"] = df.apply(lambda row: generate_signal(row, interval), axis=1)
 
     return {
@@ -284,7 +273,6 @@ def crypto(symbol: str, interval: str = Query("1h")):
         "symbol": symbol.upper(),
     }
 
-
 # -------------------------------
 # ML model: load + predict
 # -------------------------------
@@ -294,7 +282,6 @@ MODEL_PATH = "models/crypto_model.pkl"
 ml_model = None
 ml_feature_cols = None
 ml_interval = None
-
 
 def load_model():
     global ml_model, ml_feature_cols, ml_interval
@@ -313,9 +300,7 @@ def load_model():
         ml_feature_cols = None
         ml_interval = None
 
-
 load_model()
-
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -365,16 +350,13 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna()
     return df
 
-
 def map_label_to_signal(label: int) -> str:
     if label == -1:
         return "SELL"
     return "BUY"
 
-
 @app.get("/predict/{symbol}")
 def predict(symbol: str):
-    # if model not loaded, be explicit
     if ml_model is None:
         return {
             "ok": False,
@@ -388,7 +370,6 @@ def predict(symbol: str):
 
     raw = get_klines(symbol.upper(), interval=interval, limit=300)
     if not raw:
-        # explicitly tell frontend it’s a data issue (often rate limit or 4xx)
         return {
             "ok": False,
             "symbol": symbol.upper(),
