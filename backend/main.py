@@ -66,7 +66,6 @@ SYMBOL_TO_COINGECKO_ID = {
 }
 
 # Rough mapping of your requested interval to allowed CoinGecko "days" values
-# Allowed days: 1, 7, 14, 30, 90, 180, 365, max [web:198][web:204]
 INTERVAL_TO_DAYS = {
     "1m": 1,
     "5m": 1,
@@ -140,52 +139,51 @@ def generate_signal(row, interval: str = "1h"):
     uptrend = close > ema_200
     downtrend = close < ema_200
 
-    # ---- timeframe-specific tuning ----
-    # faster charts = looser RSI / bands so you see more signals
+    # ---- slightly stricter timeframe tuning ----
     if interval in ["1m", "3m", "5m"]:
-        rsi_buy_max = 60   # BUY even when not deeply oversold
-        rsi_sell_min = 40  # SELL even when not extremely overbought
-        band_lo_mult = 1.02
-        band_hi_mult = 0.98
-    elif interval in ["15m", "30m", "1h"]:
-        rsi_buy_max = 55
-        rsi_sell_min = 45
+        rsi_buy_max = 50   # stricter than before
+        rsi_sell_min = 50
         band_lo_mult = 1.01
         band_hi_mult = 0.99
+    elif interval in ["15m", "30m", "1h"]:
+        rsi_buy_max = 45
+        rsi_sell_min = 55
+        band_lo_mult = 1.00
+        band_hi_mult = 1.00
     else:  # 4h, 1d etc.
-        rsi_buy_max = 50
-        rsi_sell_min = 50
+        rsi_buy_max = 40
+        rsi_sell_min = 60
         band_lo_mult = 1.00
         band_hi_mult = 1.00
 
-    # ---- AGGRESSIVE BUY ----
-
-    # 1) trend-following: price above EMAs + MACD up
+    # ---- BUY ----
+    # trend-following: price above EMAs + MACD up + RSI not too high
     if (
         uptrend
         and close > ema_50
         and macd > macd_signal
+        and rsi < rsi_buy_max
     ):
         return "BUY"
 
-    # 2) mean-reversion: dip near/below lower band with soft RSI
+    # mean-reversion: dip near/below lower band with low-ish RSI
     if (
         rsi < rsi_buy_max
         and close <= bb_low * band_lo_mult
     ):
         return "BUY"
 
-    # ---- AGGRESSIVE SELL ----
-
-    # 3) trend-following short: price below EMAs + MACD down
+    # ---- SELL ----
+    # trend-following short: price below EMAs + MACD down + RSI not too low
     if (
         downtrend
         and close < ema_50
         and macd < macd_signal
+        and rsi > rsi_sell_min
     ):
         return "SELL"
 
-    # 4) mean-reversion: push near/above upper band with soft RSI
+    # mean-reversion: push near/above upper band with high-ish RSI
     if (
         rsi > rsi_sell_min
         and close >= bb_high * band_hi_mult
