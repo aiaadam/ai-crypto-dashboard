@@ -369,9 +369,11 @@
       mlText.textContent = p;
     }
 
-    async function fetchSignals() {
+    // Use the dropdown interval for the main AI badge,
+    // but force 1m for the Recent signals list so it always shows dense history.
+    async function fetchSignals(intervalOverride) {
       const symbol = symbolInput.value.trim().toUpperCase();
-      const interval = intervalSelect.value;
+      const interval = intervalOverride || intervalSelect.value;
       const url = `${apiBase}/crypto/${symbol}?interval=${interval}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error("API error " + res.status);
@@ -390,12 +392,46 @@
       try {
         updateBtn.disabled = true;
         updateBtn.textContent = "Loading...";
-        const [data, ml] = await Promise.all([
-          fetchSignals(),
+
+        // 1) get data for selected interval (for main badge text + last updated + Interval label)
+        const [dataSelected, ml] = await Promise.all([
+          fetchSignals(),        // uses intervalSelect.value
           fetchMlPrediction(),
         ]);
-        updateSignalUI(data);
+
+        updateSignalUI(dataSelected);
         updateMlUI(ml.prediction);
+
+        // 2) separately, get 1m data just to refresh the Recent signals list
+        try {
+          const data1m = await fetchSignals("1m");
+          // reuse updateSignalUI but override only the history section
+          const signals = data1m.signal || [];
+          const times = data1m.time || [];
+          if (signals.length && times.length) {
+            const items = [];
+            const len = Math.min(signals.length, 20);
+            for (let i = 0; i < len; i++) {
+              const s = signals[signals.length - 1 - i];
+              const t = times[times.length - 1 - i];
+              const color =
+                s === "BUY"
+                  ? "text-emerald-300"
+                  : s === "SELL"
+                  ? "text-rose-300"
+                  : "text-slate-300";
+              items.push(
+                `<div class="flex justify-between gap-2">
+                   <span class="${color}">${s}</span>
+                   <span class="text-slate-500">${formatTimestamp(t)}</span>
+                 </div>`
+              );
+            }
+            signalHistory.innerHTML = items.join("");
+          }
+        } catch (e) {
+          console.warn("1m history fetch failed, keeping selected interval history.");
+        }
       } catch (err) {
         console.error(err);
         signalText.textContent = "Error";
