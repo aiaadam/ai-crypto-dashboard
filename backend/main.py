@@ -10,7 +10,6 @@ import os
 import time
 from datetime import datetime, timedelta
 
-
 app = FastAPI(
     title="AI Crypto Dashboard",
     version="0.1.0",
@@ -40,16 +39,13 @@ print("FRONTEND_DIR:", FRONTEND_DIR)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
-
 @app.get("/", include_in_schema=False)
 def serve_dashboard():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
-
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
-
 
 # -------------------------------
 # CoinGecko data fetch (replaces Binance)
@@ -67,11 +63,13 @@ SYMBOL_TO_COINGECKO_ID = {
 
 # Rough mapping of your requested interval to "days" window
 INTERVAL_TO_DAYS = {
+    "1m": 1,
+    "5m": 2,
+    "15m": 3,
     "1h": 7,    # 7 days of hourly candles
     "4h": 30,
     "1d": 90,
 }
-
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
     symbol = symbol.upper()
@@ -116,12 +114,11 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
 
     return klines
 
-
 # -------------------------------
 # Rule-based signal
 # -------------------------------
 
-def generate_signal(row):
+def generate_signal(row, interval: str = "1h"):
     close = row["close"]
     ema_50 = row["ema_50"]
     ema_200 = row["ema_200"]
@@ -130,47 +127,64 @@ def generate_signal(row):
     macd_signal = row["macd_signal"]
     bb_high = row["bb_high"]
     bb_low = row["bb_low"]
-    vol = row["volume"]
-    vol_ma = row["vol_ma_20"]
 
     uptrend = close > ema_200
     downtrend = close < ema_200
 
-    # More aggressive BUY logic
-    if (
-        uptrend                              # price above 200 EMA
-        and rsi < 65                         # allow higher RSI
-        and macd > macd_signal               # MACD bullish
-        and close <= bb_low * 1.01           # near/below lower band
-        and vol >= 0.5 * vol_ma              # lower volume requirement
-    ):
-        return "BUY"
+    # ---- timeframe-specific tuning ----
+    # faster charts = looser RSI / bands so you see more signals
+    if interval in ["1m", "3m", "5m"]:
+        rsi_buy_max = 60   # BUY even when not deeply oversold
+        rsi_sell_min = 40  # SELL even when not extremely overbought
+        band_lo_mult = 1.02
+        band_hi_mult = 0.98
+    elif interval in ["15m", "30m", "1h"]:
+        rsi_buy_max = 55
+        rsi_sell_min = 45
+        band_lo_mult = 1.01
+        band_hi_mult = 0.99
+    else:  # 4h, 1d etc.
+        rsi_buy_max = 50
+        rsi_sell_min = 50
+        band_lo_mult = 1.00
+        band_hi_mult = 1.00
 
+    # ---- AGGRESSIVE BUY ----
+
+    # 1) trend-following: price above EMAs + MACD up
     if (
-        close > ema_50
+        uptrend
+        and close > ema_50
         and macd > macd_signal
-        and vol >= 0.8 * vol_ma              # lower from 1.2x
     ):
         return "BUY"
 
-    # More aggressive SELL logic
+    # 2) mean-reversion: dip near/below lower band with soft RSI
+    if (
+        rsi < rsi_buy_max
+        and close <= bb_low * band_lo_mult
+    ):
+        return "BUY"
+
+    # ---- AGGRESSIVE SELL ----
+
+    # 3) trend-following short: price below EMAs + MACD down
     if (
         downtrend
-        and rsi > 35                         # allow lower RSI
-        and macd < macd_signal               # MACD bearish
-        and close >= bb_high * 0.99          # near upper band
+        and close < ema_50
+        and macd < macd_signal
     ):
         return "SELL"
 
+    # 4) mean-reversion: push near/above upper band with soft RSI
     if (
-        rsi > 65                             # lower from 70
-        and close >= bb_high
-        and vol >= 1.1 * vol_ma              # lower from 1.5x
+        rsi > rsi_sell_min
+        and close >= bb_high * band_hi_mult
     ):
         return "SELL"
 
+    # fallback
     return "HOLD"
-
 
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
@@ -246,7 +260,8 @@ def crypto(symbol: str, interval: str = Query("1h")):
             "bb_high", "bb_low", "vol_ma_20"]
     df[cols] = df[cols].bfill().ffill()
 
-    df["signal"] = df.apply(generate_signal, axis=1)
+    # pass interval into signal generator so rules adapt per TF
+    df["signal"] = df.apply(lambda row: generate_signal(row, interval), axis=1)
 
     return {
         "ok": True,
@@ -260,7 +275,6 @@ def crypto(symbol: str, interval: str = Query("1h")):
         "symbol": symbol.upper(),
     }
 
-
 # -------------------------------
 # ML model: load + predict
 # -------------------------------
@@ -270,7 +284,6 @@ MODEL_PATH = "models/crypto_model.pkl"
 ml_model = None
 ml_feature_cols = None
 ml_interval = None
-
 
 def load_model():
     global ml_model, ml_feature_cols, ml_interval
@@ -289,9 +302,7 @@ def load_model():
         ml_feature_cols = None
         ml_interval = None
 
-
 load_model()
-
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -341,12 +352,10 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna()
     return df
 
-
 def map_label_to_signal(label: int) -> str:
     if label == -1:
         return "SELL"
     return "BUY"
-
 
 @app.get("/predict/{symbol}")
 def predict(symbol: str):
