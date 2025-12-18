@@ -56,8 +56,7 @@ def test_route():
 # -------------------------------
 
 COINGECKO_OHLC_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc"
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")  # <-- ADDED
-
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
 # Map your trading symbols to CoinGecko IDs
 SYMBOL_TO_COINGECKO_ID = {
@@ -87,13 +86,12 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
         "days": days,
     }
 
-    # NEW: send your API key
     headers = {}
     if COINGECKO_API_KEY:
         headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
 
     url = COINGECKO_OHLC_URL.format(id=cg_id)
-    resp = requests.get(url, params=params, headers=headers)  # <-- CHANGED
+    resp = requests.get(url, params=params, headers=headers)
     if resp.status_code == 429:
         # rate limited – return empty list instead of crashing
         print("[Data] CoinGecko rate limit hit (429)")
@@ -241,7 +239,13 @@ def crypto(symbol: str, interval: str = Query("1h")):
 
     df["vol_ma_20"] = df["volume"].rolling(20).mean()
 
-    df = df.dropna()
+    # NEW: keep rows, fill indicator NaNs instead of dropping everything
+    df[["rsi", "ema_50", "ema_200", "macd", "macd_signal",
+        "bb_high", "bb_low", "vol_ma_20"]] = df[[
+            "rsi", "ema_50", "ema_200", "macd", "macd_signal",
+            "bb_high", "bb_low", "vol_ma_20"
+        ]].fillna(method="bfill").fillna(method="ffill")
+
     df["signal"] = df.apply(generate_signal, axis=1)
 
     return {
