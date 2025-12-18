@@ -294,7 +294,7 @@
     function formatTimestamp(tsSeconds) {
       if (!tsSeconds) return "–";
       const d = new Date(tsSeconds * 1000);
-      return d.toLocaleString("en-GB"); // 18/12/2025, 20:00:00
+      return d.toLocaleString("en-GB");
     }
 
     function updateSignalUI(data) {
@@ -370,8 +370,6 @@
       mlText.textContent = p;
     }
 
-    // Use the dropdown interval for the main AI badge,
-    // but force 1m for the Recent signals list so it always shows dense history.
     async function fetchSignals(intervalOverride) {
       const symbol = symbolInput.value.trim().toUpperCase();
       const interval = intervalOverride || intervalSelect.value;
@@ -394,49 +392,18 @@
         updateBtn.disabled = true;
         updateBtn.textContent = "Loading...";
 
-        // 1) get data for selected interval (for main badge text + last updated + Interval label)
-        const [dataSelected, ml] = await Promise.all([
-          fetchSignals(),        // uses intervalSelect.value
+        const [data, ml] = await Promise.all([
+          fetchSignals(),       // uses intervalSelect.value
           fetchMlPrediction(),
         ]);
 
-        updateSignalUI(dataSelected);
+        updateSignalUI(data);
         updateMlUI(ml.prediction);
-
-        // 2) separately, get 1m data just to refresh the Recent signals list
-        try {
-          const data1m = await fetchSignals("1m");
-          // reuse updateSignalUI but override only the history section
-          const signals = data1m.signal || [];
-          const times = data1m.time || [];
-          if (signals.length && times.length) {
-            const items = [];
-            const len = Math.min(signals.length, 20);
-            for (let i = 0; i < len; i++) {
-              const s = signals[signals.length - 1 - i];
-              const t = times[times.length - 1 - i];
-              const color =
-                s === "BUY"
-                  ? "text-emerald-300"
-                  : s === "SELL"
-                  ? "text-rose-300"
-                  : "text-slate-300";
-              items.push(
-                `<div class="flex justify-between gap-2">
-                   <span class="${color}">${s}</span>
-                   <span class="text-slate-500">${formatTimestamp(t)}</span>
-                 </div>`
-              );
-            }
-            signalHistory.innerHTML = items.join("");
-          }
-        } catch (e) {
-          console.warn("1m history fetch failed, keeping selected interval history.");
-        }
       } catch (err) {
         console.error(err);
         signalText.textContent = "Error";
-        signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/60 text-rose-300";
+        signalBadge.className =
+          "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/60 text-rose-300";
         signalDot.className = "h-2 w-2 rounded-full bg-rose-400";
         updateMlUI("HOLD");
       } finally {
