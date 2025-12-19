@@ -7,7 +7,6 @@ import pandas as pd
 import ta
 import joblib
 import os
-import time
 from datetime import datetime, timedelta
 
 app = FastAPI(
@@ -27,13 +26,13 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,      # not ["*"]
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# FRONTEND (optional static mount, safe to leave)
+# FRONTEND
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 print("FRONTEND_DIR:", FRONTEND_DIR)
 
@@ -51,19 +50,16 @@ def test_route():
 
 
 # -------------------------------
-# CryptoCompare OHLC data (no auth for free tier basic use)
+# CryptoCompare OHLC data
 # -------------------------------
 
 CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
 
-# Map BINANCE-style symbols to CryptoCompare fsym/tsym
 SYMBOL_MAP = {
     "BTCUSDT": ("BTC", "USDT"),
     "ETHUSDT": ("ETH", "USDT"),
-    # add more if needed
 }
 
-# Map your intervals to CryptoCompare endpoints + aggregate
 INTERVAL_CONFIG = {
     "1m":  ("histominute", 1),
     "5m":  ("histominute", 5),
@@ -76,11 +72,6 @@ INTERVAL_CONFIG = {
 
 
 def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
-    """
-    Fetch OHLCV from CryptoCompare.
-    Returns a list shaped like Binance/CoinGecko klines:
-    [time_ms, open, high, low, close, volume, ...]
-    """
     symbol = symbol.upper()
     if symbol not in SYMBOL_MAP:
         raise ValueError(f"Unsupported symbol for CryptoCompare: {symbol}")
@@ -110,16 +101,16 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
         print(f"[Data] CryptoCompare non-success response: {data.get('Message')}")
         return []
 
-    bars = data["Data"]["Data"]  # list of {time, open, high, low, close, volumefrom, volumeto}
+    bars = data["Data"]["Data"]
 
     klines = []
     for b in bars:
-        t_sec = b["time"]              # seconds since epoch
+        t_sec = b["time"]
         o = b["open"]
         h = b["high"]
         l = b["low"]
         c = b["close"]
-        v = b["volumefrom"]            # volume in base asset
+        v = b["volumefrom"]
         t_ms = t_sec * 1000
         klines.append([
             t_ms,
@@ -135,7 +126,7 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal + (soft) Fibonacci
+# Rule-based signal (trend + momentum)
 # -------------------------------
 
 def generate_signal(row, interval: str = "1h"):
@@ -148,95 +139,58 @@ def generate_signal(row, interval: str = "1h"):
     bb_high = row["bb_high"]
     bb_low = row["bb_low"]
 
-    # Optional swing/Fibo info (pre‑computed per row)
-    swing_low = row.get("swing_low", None)
-    swing_high = row.get("swing_high", None)
+    # Clear trend definition: big players care about this first
+    uptrend = (close > ema_200) and (ema_50 > ema_200)
+    downtrend = (close < ema_200) and (ema_50 < ema_200)
 
-    uptrend = close > ema_200
-    downtrend = close < ema_200
-
-    # ----- PARAMS PER TIMEFRAME -----
-    if interval in ["1m"]:
-        # 1m: softer RSI, but still trend‑aware
-        rsi_buy_max = 50      # oversold-ish
-        rsi_sell_min = 50     # overbought-ish
-        band_lo_mult = 1.00
-        band_hi_mult = 1.00
-        require_trend = True          # trade with EMA200 trend
-        require_macd_cross = False
+    # Timeframe-specific RSI bounds (how picky we are about OB/OS)
+    if interval == "1m":
+        rsi_buy_max = 65   # don't buy if extreme OB
+        rsi_sell_min = 35  # don't sell if extreme OS
     elif interval in ["5m", "15m"]:
-        rsi_buy_max = 50
-        rsi_sell_min = 50
-        band_lo_mult = 1.00
-        band_hi_mult = 1.00
-        require_trend = True
-        require_macd_cross = False
-    elif interval in ["30m", "1h"]:
-        rsi_buy_max = 55
-        rsi_sell_min = 45
-        band_lo_mult = 1.00
-        band_hi_mult = 1.00
-        require_trend = False
-        require_macd_cross = False
-    else:  # 4h, 1d etc.
-        rsi_buy_max = 60
-        rsi_sell_min = 40
-        band_lo_mult = 1.00
-        band_hi_mult = 1.00
-        require_trend = False
-        require_macd_cross = False
+        rsi_buy_max = 70
+        rsi_sell_min = 30
+    else:  # 30m, 1h, 4h, 1d
+        rsi_buy_max = 75
+        rsi_sell_min = 25
 
-    # ----- FIBONACCI RETRACEMENT ZONES (soft, not required) -----
-    fib_in_buy_zone = True
-    fib_in_sell_zone = True
-
-    if swing_low is not None and swing_high is not None:
-        diff = swing_high - swing_low
-        if diff > 0:
-            fib_382 = swing_high - 0.382 * diff
-            fib_618 = swing_high - 0.618 * diff
-            fib_in_buy_zone = fib_618 <= close <= fib_382
-
-            fib_382_d = swing_low + 0.382 * diff
-            fib_618_d = swing_low + 0.618 * diff
-            fib_in_sell_zone = fib_382_d <= close <= fib_618_d
-
-    # ----- BUY RULES -----
+    # ---------------- BUY LOGIC ----------------
+    # 1) Strong trend-following buy
     if (
-        (not require_trend or uptrend)
+        uptrend
         and close > ema_50
+        and macd > macd_signal        # momentum up
+        and rsi < rsi_buy_max         # not too overbought
+    ):
+        return "BUY"
+
+    # 2) Pullback buy into lower band in an uptrend
+    if (
+        uptrend
+        and close <= bb_low           # price at volatility support
         and rsi < rsi_buy_max
-        and macd >= macd_signal
-        # Fibonacci is advisory; not gating
     ):
         return "BUY"
 
+    # ---------------- SELL LOGIC ---------------
+    # 1) Strong trend-following sell
     if (
-        rsi < rsi_buy_max
-        and close <= bb_low * band_lo_mult
-        and (not require_trend or uptrend)
-        # Fibonacci is advisory; not gating
-    ):
-        return "BUY"
-
-    # ----- SELL RULES -----
-    if (
-        (not require_trend or downtrend)
+        downtrend
         and close < ema_50
-        and rsi > rsi_sell_min
-        and macd <= macd_signal
-        # Fibonacci is advisory; not gating
+        and macd < macd_signal        # momentum down
+        and rsi > rsi_sell_min        # not too oversold
     ):
         return "SELL"
 
+    # 2) Mean-reversion sell into upper band in a downtrend
     if (
-        rsi > rsi_sell_min
-        and close >= bb_high * band_hi_mult
-        and (not require_trend or downtrend)
-        # Fibonacci is advisory; not gating
+        downtrend
+        and close >= bb_high
+        and rsi > rsi_sell_min
     ):
         return "SELL"
 
+    # Otherwise, no clear edge
     return "HOLD"
 
 
@@ -285,8 +239,8 @@ def crypto(symbol: str, interval: str = Query("1h")):
     df["close"] = df["close"].astype(float)
     df["volume"] = df["volume"].astype(float)
 
+    # Indicators
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
-
     df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
     df["ema_200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
 
@@ -313,11 +267,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
             "bb_high", "bb_low", "vol_ma_20"]
     df[cols] = df[cols].bfill().ffill()
 
-    # Fibonacci swings: simple last-N-bar high/low (still computed for future use)
-    N = 50
-    df["swing_low"] = df["low"].rolling(N).min()
-    df["swing_high"] = df["high"].rolling(N).max()
-
+    # Generate signals
     df["signal"] = df.apply(lambda row: generate_signal(row, interval), axis=1)
 
     return {
