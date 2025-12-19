@@ -1,17 +1,14 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import requests
 import pandas as pd
 import ta
-import joblib
 import os
-from datetime import datetime, timedelta
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.1.0",
+    version="0.2.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -126,10 +123,16 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal (RSI+MACD "clever mind")
+# Rule-based signal (RSI+MACD brain)
 # -------------------------------
 
-def generate_signal(row, interval: str = "1h"):
+def generate_signal(row, interval: str, strictness: float):
+    """
+    strictness in [0,1]:
+    - 0.0 = very aggressive (lots of trades)
+    - 0.5 = medium
+    - 1.0 = very strict (only strong setups)
+    """
     close = row["close"]
     ema_50 = row["ema_50"]
     ema_200 = row["ema_200"]
@@ -138,103 +141,101 @@ def generate_signal(row, interval: str = "1h"):
     macd_signal = row["macd_signal"]
     bb_high = row["bb_high"]
     bb_low = row["bb_low"]
+    atr_perc = row.get("atr_perc", 0.0)
 
-    # Trend from EMAs (soft filter, not strict)
+    # Trend from EMAs
     ema_uptrend = ema_50 > ema_200
     ema_downtrend = ema_50 < ema_200
 
-    # RSI zones (flexible)
-    #  - 40–60 = neutral but can still buy/sell with MACD confluence
-    #  - <40 = weak / bearish zone
-    #  - >60 = stronger bullish zone
+    # RSI zones
     rsi_bullish_zone = rsi >= 40
     rsi_strong_bull = rsi >= 55
     rsi_bearish_zone = rsi <= 60
     rsi_strong_bear = rsi <= 45
 
-    # MACD confluence: direction + strength
+    # MACD
     macd_bull = macd > macd_signal
     macd_bear = macd < macd_signal
-
-    # Use MACD distance from signal to judge conviction
     macd_diff = macd - macd_signal
 
-    # Timeframe‑specific sensitivity
+    # Timeframe‑specific base sensitivity
     if interval == "1m":
-        macd_trend_min = 0.0       # very sensitive on 1m
-        macd_strong = 0.0005       # strong MACD separation
+        base_macd_strong = 0.0005
+        base_min_vol = 0.001
     elif interval in ["5m", "15m"]:
-        macd_trend_min = 0.0
-        macd_strong = 0.0008
+        base_macd_strong = 0.0008
+        base_min_vol = 0.0008
     else:
-        macd_trend_min = 0.0
-        macd_strong = 0.0010
+        base_macd_strong = 0.0010
+        base_min_vol = 0.0005
+
+    # Adjust sensitivity by strictness
+    # stricter = require stronger MACD and more volatility
+    macd_strong = base_macd_strong * (1.0 + strictness)
+    min_vol = base_min_vol * (1.0 + 0.5 * strictness)
 
     strong_macd_up = macd_diff > macd_strong
     strong_macd_down = macd_diff < -macd_strong
 
-    # Bands just for extra context (not strict)
+    # Bands
     near_lower_band = bb_low is not None and bb_low > 0 and close <= bb_low
     near_upper_band = bb_high is not None and bb_high > 0 and close >= bb_high
 
+    # Volatility guard: if ultra-low vol and strict, avoid trades
+    if strictness > 0.5 and atr_perc is not None and atr_perc < min_vol:
+        return "HOLD"
+
     # ---------------- BUY LOGIC ----------------
-    # 1) Strong buy: everything aligned
+    # Strong buy
     if (
-        rsi_strong_bull           # RSI > ~55
+        rsi_strong_bull
         and macd_bull
         and strong_macd_up
-        and (ema_uptrend or not ema_downtrend)  # prefer longs when ema not clearly down
+        and (ema_uptrend or not ema_downtrend)
     ):
         return "BUY"
 
-    # 2) Normal buy: RSI bull zone (>=40) + MACD bullish
+    # Normal buy: RSI bull zone + MACD bullish
     if (
         rsi_bullish_zone
         and macd_bull
-        and macd_diff > macd_trend_min
+        and macd_diff > 0
     ):
-        # If price is at upper band and RSI very high, skip greed
-        if near_upper_band and rsi > 70:
-            # overextended, better not chase
+        if near_upper_band and rsi > 70 and strictness > 0.3:
             return "HOLD"
         return "BUY"
 
     # ---------------- SELL LOGIC ---------------
-    # 1) Strong sell: everything aligned
+    # Strong sell
     if (
-        rsi_strong_bear            # RSI < ~45
+        rsi_strong_bear
         and macd_bear
         and strong_macd_down
         and (ema_downtrend or not ema_uptrend)
     ):
         return "SELL"
 
-    # 2) Normal sell: RSI bear zone (<=60) + MACD bearish
+    # Normal sell
     if (
         rsi_bearish_zone
         and macd_bear
-        and macd_diff < -macd_trend_min
+        and macd_diff < 0
     ):
-        # If price is at lower band and RSI <30, avoid panic short
-        if near_lower_band and rsi < 30:
+        if near_lower_band and rsi < 30 and strictness > 0.3:
             return "HOLD"
         return "SELL"
 
-    # ---------------- DISAGREEMENT HANDLING ---------------
-    # RSI bullish but MACD mildly bearish: market pausing → HOLD
-    if rsi >= 55 and macd_bear:
-        return "HOLD"
-
-    # RSI bearish but MACD mildly bullish: possible squeeze → HOLD
-    if rsi <= 45 and macd_bull:
-        return "HOLD"
-
-    # In middle zone (40–60) and MACD is tiny (no conviction)
-    if 40 <= rsi <= 60 and abs(macd_diff) < macd_strong:
-        return "HOLD"
-
-    # Default
+    # Disagreement / no clear edge
     return "HOLD"
+
+
+def strictness_from_risk(risk: str) -> float:
+    risk = (risk or "medium").lower()
+    if risk == "risky":
+        return 0.0
+    if risk == "strict":
+        return 1.0
+    return 0.5
 
 
 @app.get("/crypto/{symbol}")
@@ -304,14 +305,25 @@ def crypto(symbol: str, interval: str = Query("1h")):
     df["bb_high"] = bb_ind.bollinger_hband()
     df["bb_low"] = bb_ind.bollinger_lband()
 
+    # Volatility
+    atr_ind = ta.volatility.AverageTrueRange(
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        window=14,
+    )
+    df["atr"] = atr_ind.average_true_range()
+    df["atr_perc"] = df["atr"] / df["close"]
+
     df["vol_ma_20"] = df["volume"].rolling(20).mean()
 
     cols = ["rsi", "ema_50", "ema_200", "macd", "macd_signal",
-            "bb_high", "bb_low", "vol_ma_20"]
+            "bb_high", "bb_low", "vol_ma_20", "atr", "atr_perc"]
     df[cols] = df[cols].bfill().ffill()
 
-    # Generate signals
-    df["signal"] = df.apply(lambda row: generate_signal(row, interval), axis=1)
+    # Default risk strictness = medium
+    strictness = strictness_from_risk("medium")
+    df["signal"] = df.apply(lambda row: generate_signal(row, interval, strictness), axis=1)
 
     return {
         "ok": True,
@@ -327,149 +339,20 @@ def crypto(symbol: str, interval: str = Query("1h")):
 
 
 # -------------------------------
-# ML model: load + predict
+# Simple "AI" prediction endpoint with risk
 # -------------------------------
-
-MODEL_PATH = "models/crypto_model.pkl"
-
-ml_model = None
-ml_feature_cols = None
-ml_interval = None
-
-
-def load_model():
-    global ml_model, ml_feature_cols, ml_interval
-    try:
-        if not os.path.exists(MODEL_PATH):
-            print(f"[ML] Model file not found at {MODEL_PATH} - skipping ML load")
-            return
-        bundle = joblib.load(MODEL_PATH)
-        ml_model = bundle["model"]
-        ml_feature_cols = bundle["feature_cols"]
-        ml_interval = bundle["interval"]
-        print(f"[ML] Loaded model from {MODEL_PATH} (interval={ml_interval})")
-    except Exception as e:
-        print(f"[ML] Failed to load model: {e}")
-        ml_model = None
-        ml_feature_cols = None
-        ml_interval = None
-
-
-load_model()
-
-
-def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    df["time"] = df["time"] // 1000
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["close"] = df["close"].astype(float)
-    df["volume"] = df["volume"].astype(float)
-
-    df["ret_1"] = df["close"].pct_change()
-    df["ret_3"] = df["close"].pct_change(3)
-    df["ret_6"] = df["close"].pct_change(6)
-
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
-
-    ema20 = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
-    ema50 = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
-    df["ema_20"] = ema20
-    df["ema_50"] = ema50
-    df["dist_ema_20"] = df["close"] / ema20 - 1
-    df["dist_ema_50"] = df["close"] / ema50 - 1
-
-    macd_ind = ta.trend.MACD(
-        close=df["close"],
-        window_slow=26,
-        window_fast=12,
-        window_sign=9,
-    )
-    df["macd"] = macd_ind.macd()
-    df["macd_signal"] = macd_ind.macd_signal()
-    df["macd_hist"] = macd_ind.macd_diff()
-
-    bb_ind = ta.volatility.BollingerBands(
-        close=df["close"],
-        window=20,
-        window_dev=2,
-    )
-    df["bb_high"] = bb_ind.bollinger_hband()
-    df["bb_low"] = bb_ind.bollinger_lband()
-    df["bb_width"] = (df["bb_high"] - df["bb_low"]) / df["close"]
-
-    df["vol_ma_20"] = df["volume"].rolling(20).mean()
-    df["vol_rel"] = df["volume"] / df["vol_ma_20"]
-
-    df = df.dropna()
-    return df
-
-
-def map_label_to_signal(label: int) -> str:
-    if label == -1:
-        return "SELL"
-    return "BUY"
-
-
-def map_proba_to_signal(p_sell: float, p_buy: float, risk: str) -> str:
-    """
-    Convert model probabilities into BUY/SELL/HOLD based on risk mode.
-    Assumes binary classifier with classes [-1 (SELL), +1 (BUY)].
-    """
-    # Risk-dependent thresholds
-    if risk == "risky":
-        buy_th = 0.55
-        sell_th = 0.55
-        hold_gap = 0.05   # small gap → fewer holds
-    elif risk == "strict":
-        buy_th = 0.75
-        sell_th = 0.75
-        hold_gap = 0.20   # big gap → more holds when unsure
-    else:  # "medium" default
-        buy_th = 0.65
-        sell_th = 0.65
-        hold_gap = 0.10
-
-    # Prefer side with higher probability when above threshold
-    if p_buy >= buy_th and (p_buy - p_sell) >= hold_gap:
-        return "BUY"
-    if p_sell >= sell_th and (p_sell - p_buy) >= hold_gap:
-        return "SELL"
-
-    # If neither side is clearly better, HOLD
-    return "HOLD"
-
 
 @app.get("/predict/{symbol}")
 def predict(symbol: str, risk: str = Query("medium")):
     """
-    AI-based prediction endpoint.
-
-    risk: "risky" | "medium" | "strict"
-    - risky  -> lower thresholds, more trades
-    - medium -> balanced
-    - strict -> higher thresholds, fewer but higher-confidence trades
+    Uses the same indicator brain but applies a different strictness
+    based on risk: "risky" | "medium" | "strict".
     """
-    if ml_model is None:
-        return {
-            "ok": False,
-            "symbol": symbol.upper(),
-            "interval": ml_interval or "unknown",
-            "prediction": "HOLD",
-            "info": "ML model not loaded",
-        }
+    interval = "15m"
+    strictness = strictness_from_risk(risk)
 
-    # normalize risk
-    risk = risk.lower()
-    if risk not in ("risky", "medium", "strict"):
-        risk = "medium"
-
-    interval = ml_interval or "15m"
-
-    raw = get_klines(symbol.upper(), interval=interval, limit=300)
-    if not raw:
+    data = get_klines(symbol.upper(), interval=interval, limit=300)
+    if not data:
         return {
             "ok": False,
             "symbol": symbol.upper(),
@@ -479,7 +362,7 @@ def predict(symbol: str, risk: str = Query("medium")):
         }
 
     df = pd.DataFrame(
-        raw,
+        data,
         columns=[
             "time",
             "open",
@@ -495,61 +378,63 @@ def predict(symbol: str, risk: str = Query("medium")):
             "_6",
         ],
     )
-    df = build_ml_features(df)
 
+    df["time"] = df["time"] // 1000
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+
+    # Indicators
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+    df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+    df["ema_200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
+
+    macd_ind = ta.trend.MACD(
+        close=df["close"],
+        window_slow=26,
+        window_fast=12,
+        window_sign=9,
+    )
+    df["macd"] = macd_ind.macd()
+    df["macd_signal"] = macd_ind.macd_signal()
+
+    bb_ind = ta.volatility.BollingerBands(
+        close=df["close"],
+        window=20,
+        window_dev=2,
+    )
+    df["bb_high"] = bb_ind.bollinger_hband()
+    df["bb_low"] = bb_ind.bollinger_lband()
+
+    atr_ind = ta.volatility.AverageTrueRange(
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        window=14,
+    )
+    df["atr"] = atr_ind.average_true_range()
+    df["atr_perc"] = df["atr"] / df["close"]
+
+    df = df.dropna()
     if len(df) == 0:
         return {
             "ok": False,
             "symbol": symbol.upper(),
             "interval": interval,
             "prediction": "HOLD",
-            "info": "Not enough data for features",
+            "info": "Not enough data after indicators",
         }
 
     latest = df.iloc[-1]
-    X = latest[ml_feature_cols].values.reshape(1, -1)
-
-    # Get raw class prediction
-    try:
-        label = int(ml_model.predict(X)[0])
-    except Exception as e:
-        print(f"[ML] predict failed: {e}")
-        return {
-            "ok": False,
-            "symbol": symbol.upper(),
-            "interval": interval,
-            "prediction": "HOLD",
-            "info": "ML predict error",
-        }
-
-    # Default mapping using label (fallback)
-    base_signal = map_label_to_signal(label)
-
-    # Try to use probabilities for risk-based decision
-    p_buy = None
-    p_sell = None
-    final_signal = base_signal
-    try:
-        proba = ml_model.predict_proba(X)[0]
-        # Assume classes are [-1, +1] in that order or use model.classes_
-        classes = list(ml_model.classes_)
-        # Map class index to prob
-        class_to_proba = {cls: p for cls, p in zip(classes, proba)}
-        p_sell = float(class_to_proba.get(-1, 0.0))
-        p_buy = float(class_to_proba.get(1, 0.0))
-
-        final_signal = map_proba_to_signal(p_sell, p_buy, risk)
-    except Exception as e:
-        print(f"[ML] predict_proba not available or failed: {e}")
+    pred_signal = generate_signal(latest, interval, strictness)
 
     return {
         "ok": True,
         "symbol": symbol.upper(),
         "interval": interval,
-        "prediction": final_signal,
-        "raw_label": label,
-        "p_buy": p_buy,
-        "p_sell": p_sell,
-        "risk": risk,
+        "prediction": pred_signal,
+        "risk": risk.lower(),
         "time": int(latest["time"]),
     }
