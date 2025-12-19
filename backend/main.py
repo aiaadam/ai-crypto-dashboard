@@ -39,84 +39,62 @@ print("FRONTEND_DIR:", FRONTEND_DIR)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
+
 @app.get("/", include_in_schema=False)
 def serve_dashboard():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
+
 
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
 
+
 # -------------------------------
-# CoinGecko data fetch (replaces Binance)
+# Binance public OHLC data (no API key)
 # -------------------------------
 
-COINGECKO_OHLC_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc"
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
+BINANCE_BASE = "https://api.binance.com"
 
-# Map your trading symbols to CoinGecko IDs
-SYMBOL_TO_COINGECKO_ID = {
-    "BTCUSDT": "bitcoin",
-    "ETHUSDT": "ethereum",
-    # add more here if needed
-}
 
-# Mapping of requested interval → CoinGecko "days"
-# Shorter intervals use very small days windows so you get fresher / denser candles.
-INTERVAL_TO_DAYS = {
-    "1m": 1,     # last 1 day of candles
-    "5m": 1,
-    "15m": 1,
-    "30m": 1,
-    "1h": 7,
-    "4h": 14,
-    "1d": 30,
-}
-
-def get_klines(symbol: str, interval: str = "1h", limit: int = 500):
-    symbol = symbol.upper()
-    cg_id = SYMBOL_TO_COINGECKO_ID.get(symbol)
-    if cg_id is None:
-        raise ValueError(f"Unsupported symbol for CoinGecko: {symbol}")
-
-    days = INTERVAL_TO_DAYS.get(interval, 7)
-
+def get_klines(symbol: str, interval: str = "1m", limit: int = 500):
+    """
+    Fetch candlesticks from Binance public API (no API key needed).
+    interval must be one of Binance's supported intervals:
+    1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M
+    """
+    symbol = symbol.upper()  # e.g. BTCUSDT
     params = {
-        "vs_currency": "usd",
-        "days": days,
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit,
     }
-
-    headers = {}
-    if COINGECKO_API_KEY:
-        headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
-
-    url = COINGECKO_OHLC_URL.format(id=cg_id)
-    resp = requests.get(url, params=params, headers=headers)
-
-    # handle common errors without crashing
+    url = f"{BINANCE_BASE}/api/v3/klines"
+    resp = requests.get(url, params=params)
+    # handle common errors without crashing hard
     if resp.status_code in (400, 401, 403, 404, 429, 500, 503):
-        print(f"[Data] CoinGecko error {resp.status_code} for {url}")
+        print(f"[Data] Binance error {resp.status_code} for {url} params={params}")
         return []
 
     resp.raise_for_status()
-    raw = resp.json()
-    # raw: [[timestamp_ms, open, high, low, close], ...]
+    raw = resp.json()  # [[openTime, open, high, low, close, volume, closeTime, ...], ...]
 
     klines = []
-    for item in raw[-limit:]:
-        t, o, h, l, c = item
-        volume = 0.0  # CoinGecko OHLC doesn't include volume
+    for item in raw:
+        # item: [openTime, open, high, low, close, volume, closeTime, ...]
+        t, o, h, l, c, v = item[0], item[1], item[2], item[3], item[4], item[5]
         klines.append([
             t,
             str(o),
             str(h),
             str(l),
             str(c),
-            str(volume),
+            str(v),
             "0", "0", "0", "0", "0", "0",
         ])
 
     return klines
+
 
 # -------------------------------
 # Rule-based signal
@@ -184,6 +162,7 @@ def generate_signal(row, interval: str = "1h"):
 
     return "HOLD"
 
+
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
     # Debug line so you can see what interval is actually used
@@ -223,7 +202,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
         ],
     )
 
-    df["time"] = df["time"] // 1000
+    df["time"] = df["time"] // 1000   # ms → seconds
     df["open"] = df["open"].astype(float)
     df["high"] = df["high"].astype(float)
     df["low"] = df["low"].astype(float)
@@ -273,6 +252,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
         "symbol": symbol.upper(),
     }
 
+
 # -------------------------------
 # ML model: load + predict
 # -------------------------------
@@ -282,6 +262,7 @@ MODEL_PATH = "models/crypto_model.pkl"
 ml_model = None
 ml_feature_cols = None
 ml_interval = None
+
 
 def load_model():
     global ml_model, ml_feature_cols, ml_interval
@@ -300,7 +281,9 @@ def load_model():
         ml_feature_cols = None
         ml_interval = None
 
+
 load_model()
+
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -350,10 +333,12 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna()
     return df
 
+
 def map_label_to_signal(label: int) -> str:
     if label == -1:
         return "SELL"
     return "BUY"
+
 
 @app.get("/predict/{symbol}")
 def predict(symbol: str):
