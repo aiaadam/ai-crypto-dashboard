@@ -51,40 +51,80 @@ def test_route():
 
 
 # -------------------------------
-# Binance public OHLC data (no API key)
+# CryptoCompare OHLC data (no auth for free tier basic use)
 # -------------------------------
+# Docs: https://min-api.cryptocompare.com/  [web:370][web:376]
 
-BINANCE_BASE = "https://api.binance.com"
+CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
+
+# Map BINANCE-style symbols to CryptoCompare fsym/tsym
+SYMBOL_MAP = {
+    "BTCUSDT": ("BTC", "USDT"),
+    "ETHUSDT": ("ETH", "USDT"),
+    # add more if needed
+}
+
+# Map your intervals to CryptoCompare endpoints + aggregate
+INTERVAL_CONFIG = {
+    "1m":  ("histominute", 1),
+    "5m":  ("histominute", 5),
+    "15m": ("histominute", 15),
+    "30m": ("histominute", 30),
+    "1h":  ("histohour",   1),
+    "4h":  ("histohour",   4),
+    "1d":  ("histoday",    1),
+}
 
 
-def get_klines(symbol: str, interval: str = "1m", limit: int = 500):
+def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
     """
-    Fetch candlesticks from Binance public API (no API key needed).
-    interval must be one of Binance's supported intervals:
-    1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M
+    Fetch OHLCV from CryptoCompare.
+    Returns a list shaped like Binance/CoinGecko klines:
+    [time_ms, open, high, low, close, volume, ...]
     """
-    symbol = symbol.upper()  # e.g. BTCUSDT
+    symbol = symbol.upper()
+    if symbol not in SYMBOL_MAP:
+        raise ValueError(f"Unsupported symbol for CryptoCompare: {symbol}")
+
+    fsym, tsym = SYMBOL_MAP[symbol]
+    cfg = INTERVAL_CONFIG.get(interval)
+    if cfg is None:
+        # default fallback
+        cfg = INTERVAL_CONFIG["1m"]
+    endpoint, aggregate = cfg
+
+    url = f"{CRYPTOCOMPARE_BASE}/data/v2/{endpoint}"
     params = {
-        "symbol": symbol,
-        "interval": interval,
+        "fsym": fsym,
+        "tsym": tsym,
         "limit": limit,
+        "aggregate": aggregate,
     }
-    url = f"{BINANCE_BASE}/api/v3/klines"
+
     resp = requests.get(url, params=params)
-    # handle common errors without crashing hard
     if resp.status_code in (400, 401, 403, 404, 429, 500, 503):
-        print(f"[Data] Binance error {resp.status_code} for {url} params={params}")
+        print(f"[Data] CryptoCompare error {resp.status_code} for {url} params={params}")
         return []
 
     resp.raise_for_status()
-    raw = resp.json()  # [[openTime, open, high, low, close, volume, closeTime, ...], ...]
+    data = resp.json()
+    if data.get("Response") != "Success":
+        print(f"[Data] CryptoCompare non-success response: {data.get('Message')}")
+        return []
+
+    bars = data["Data"]["Data"]  # list of {time, open, high, low, close, volumefrom, volumeto}
 
     klines = []
-    for item in raw:
-        # item: [openTime, open, high, low, close, volume, closeTime, ...]
-        t, o, h, l, c, v = item[0], item[1], item[2], item[3], item[4], item[5]
+    for b in bars:
+        t_sec = b["time"]              # seconds since epoch
+        o = b["open"]
+        h = b["high"]
+        l = b["low"]
+        c = b["close"]
+        v = b["volumefrom"]            # volume in base asset
+        t_ms = t_sec * 1000
         klines.append([
-            t,
+            t_ms,
             str(o),
             str(h),
             str(l),
@@ -115,7 +155,7 @@ def generate_signal(row, interval: str = "1h"):
 
     # ---- slightly stricter timeframe tuning ----
     if interval in ["1m", "3m", "5m"]:
-        rsi_buy_max = 50   # stricter than before
+        rsi_buy_max = 50
         rsi_sell_min = 50
         band_lo_mult = 1.01
         band_hi_mult = 0.99
@@ -130,7 +170,7 @@ def generate_signal(row, interval: str = "1h"):
         band_lo_mult = 1.00
         band_hi_mult = 1.00
 
-    # ---- BUY ----
+    # BUY
     if (
         uptrend
         and close > ema_50
@@ -145,7 +185,7 @@ def generate_signal(row, interval: str = "1h"):
     ):
         return "BUY"
 
-    # ---- SELL ----
+    # SELL
     if (
         downtrend
         and close < ema_50
@@ -165,7 +205,6 @@ def generate_signal(row, interval: str = "1h"):
 
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
-    # Debug line so you can see what interval is actually used
     print(f"[CRYPTO] symbol={symbol.upper()} interval={interval}")
 
     data = get_klines(symbol.upper(), interval=interval)
@@ -181,7 +220,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
             "signal": [],
             "interval": interval,
             "symbol": symbol.upper(),
-            "info": "No data (possibly rate limited by data provider)",
+            "info": "No data from provider",
         }
 
     df = pd.DataFrame(
@@ -202,14 +241,13 @@ def crypto(symbol: str, interval: str = Query("1h")):
         ],
     )
 
-    df["time"] = df["time"] // 1000   # ms → seconds
+    df["time"] = df["time"] // 1000
     df["open"] = df["open"].astype(float)
     df["high"] = df["high"].astype(float)
     df["low"] = df["low"].astype(float)
     df["close"] = df["close"].astype(float)
     df["volume"] = df["volume"].astype(float)
 
-    # Indicators
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
 
     df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
@@ -360,7 +398,7 @@ def predict(symbol: str):
             "symbol": symbol.upper(),
             "interval": interval,
             "prediction": "HOLD",
-            "info": "No data from provider (rate limited or unavailable)",
+            "info": "No data from provider",
         }
 
     df = pd.DataFrame(
