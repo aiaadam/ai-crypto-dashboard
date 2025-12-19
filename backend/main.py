@@ -72,6 +72,11 @@ INTERVAL_CONFIG = {
 
 
 def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
+    """
+    Fetch OHLCV from CryptoCompare.
+    Returns a list shaped like Binance/CoinGecko klines:
+    [time_ms, open, high, low, close, volume, ...]
+    """
     symbol = symbol.upper()
     if symbol not in SYMBOL_MAP:
         raise ValueError(f"Unsupported symbol for CryptoCompare: {symbol}")
@@ -126,7 +131,7 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal (trend + momentum)
+# Rule-based signal (momentum-focused)
 # -------------------------------
 
 def generate_signal(row, interval: str = "1h"):
@@ -139,58 +144,64 @@ def generate_signal(row, interval: str = "1h"):
     bb_high = row["bb_high"]
     bb_low = row["bb_low"]
 
-    # Clear trend definition: big players care about this first
-    uptrend = (close > ema_200) and (ema_50 > ema_200)
-    downtrend = (close < ema_200) and (ema_50 < ema_200)
+    # Medium‑term trend from EMAs (for pullbacks)
+    ema_uptrend = ema_50 > ema_200
+    ema_downtrend = ema_50 < ema_200
 
-    # Timeframe-specific RSI bounds (how picky we are about OB/OS)
+    # Short‑term trend via RSI 50 line (reactive)
+    rsi_up = rsi > 50
+    rsi_down = rsi < 50
+
+    # Momentum from MACD
+    macd_bull = macd > macd_signal
+    macd_bear = macd < macd_signal
+
+    # OB/OS guards per timeframe
     if interval == "1m":
-        rsi_buy_max = 65   # don't buy if extreme OB
-        rsi_sell_min = 35  # don't sell if extreme OS
+        rsi_ob = 75   # overbought guard
+        rsi_os = 25   # oversold guard
     elif interval in ["5m", "15m"]:
-        rsi_buy_max = 70
-        rsi_sell_min = 30
-    else:  # 30m, 1h, 4h, 1d
-        rsi_buy_max = 75
-        rsi_sell_min = 25
+        rsi_ob = 80
+        rsi_os = 20
+    else:
+        rsi_ob = 85
+        rsi_os = 15
 
     # ---------------- BUY LOGIC ----------------
-    # 1) Strong trend-following buy
+    # 1) Aggressive continuation BUY: RSI above 50 + MACD bullish
     if (
-        uptrend
-        and close > ema_50
-        and macd > macd_signal        # momentum up
-        and rsi < rsi_buy_max         # not too overbought
+        rsi_up
+        and macd_bull
+        and rsi < rsi_ob
     ):
         return "BUY"
 
-    # 2) Pullback buy into lower band in an uptrend
+    # 2) Pullback BUY: in EMA uptrend, price near lower band, RSI not in a crash
     if (
-        uptrend
-        and close <= bb_low           # price at volatility support
-        and rsi < rsi_buy_max
+        ema_uptrend
+        and close <= bb_low
+        and rsi > rsi_os
     ):
         return "BUY"
 
     # ---------------- SELL LOGIC ---------------
-    # 1) Strong trend-following sell
+    # 1) Aggressive continuation SELL: RSI below 50 + MACD bearish
     if (
-        downtrend
-        and close < ema_50
-        and macd < macd_signal        # momentum down
-        and rsi > rsi_sell_min        # not too oversold
+        rsi_down
+        and macd_bear
+        and rsi > rsi_os
     ):
         return "SELL"
 
-    # 2) Mean-reversion sell into upper band in a downtrend
+    # 2) Pullback SELL: in EMA downtrend, price near upper band
     if (
-        downtrend
+        ema_downtrend
         and close >= bb_high
-        and rsi > rsi_sell_min
+        and rsi < rsi_ob
     ):
         return "SELL"
 
-    # Otherwise, no clear edge
+    # Otherwise HOLD
     return "HOLD"
 
 
