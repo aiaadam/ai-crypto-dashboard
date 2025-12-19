@@ -135,7 +135,7 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal + Fibonacci
+# Rule-based signal + (soft) Fibonacci
 # -------------------------------
 
 def generate_signal(row, interval: str = "1h"):
@@ -157,9 +157,9 @@ def generate_signal(row, interval: str = "1h"):
 
     # ----- PARAMS PER TIMEFRAME -----
     if interval in ["1m"]:
-        # 1m: not super strict, but avoid spam
-        rsi_buy_max = 45      # oversold-ish
-        rsi_sell_min = 55     # overbought-ish
+        # 1m: softer RSI, but still trend‑aware
+        rsi_buy_max = 50      # oversold-ish
+        rsi_sell_min = 50     # overbought-ish
         band_lo_mult = 1.00
         band_hi_mult = 1.00
         require_trend = True          # trade with EMA200 trend
@@ -186,22 +186,20 @@ def generate_signal(row, interval: str = "1h"):
         require_trend = False
         require_macd_cross = False
 
-    # ----- FIBONACCI RETRACEMENT ZONES -----
-    fib_buy_ok = True
-    fib_sell_ok = True
+    # ----- FIBONACCI RETRACEMENT ZONES (soft, not required) -----
+    fib_in_buy_zone = True
+    fib_in_sell_zone = True
 
     if swing_low is not None and swing_high is not None:
         diff = swing_high - swing_low
         if diff > 0:
-            # Uptrend pullback zone (38.2–61.8%)
             fib_382 = swing_high - 0.382 * diff
             fib_618 = swing_high - 0.618 * diff
-            fib_buy_ok = fib_618 <= close <= fib_382
+            fib_in_buy_zone = fib_618 <= close <= fib_382
 
-            # Downtrend pullback zone (mirrored)
             fib_382_d = swing_low + 0.382 * diff
             fib_618_d = swing_low + 0.618 * diff
-            fib_sell_ok = fib_382_d <= close <= fib_618_d
+            fib_in_sell_zone = fib_382_d <= close <= fib_618_d
 
     # ----- BUY RULES -----
     if (
@@ -209,7 +207,7 @@ def generate_signal(row, interval: str = "1h"):
         and close > ema_50
         and rsi < rsi_buy_max
         and macd >= macd_signal
-        and fib_buy_ok
+        # Fibonacci is advisory; not gating
     ):
         return "BUY"
 
@@ -217,7 +215,7 @@ def generate_signal(row, interval: str = "1h"):
         rsi < rsi_buy_max
         and close <= bb_low * band_lo_mult
         and (not require_trend or uptrend)
-        and fib_buy_ok
+        # Fibonacci is advisory; not gating
     ):
         return "BUY"
 
@@ -227,7 +225,7 @@ def generate_signal(row, interval: str = "1h"):
         and close < ema_50
         and rsi > rsi_sell_min
         and macd <= macd_signal
-        and fib_sell_ok
+        # Fibonacci is advisory; not gating
     ):
         return "SELL"
 
@@ -235,7 +233,7 @@ def generate_signal(row, interval: str = "1h"):
         rsi > rsi_sell_min
         and close >= bb_high * band_hi_mult
         and (not require_trend or downtrend)
-        and fib_sell_ok
+        # Fibonacci is advisory; not gating
     ):
         return "SELL"
 
@@ -315,7 +313,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
             "bb_high", "bb_low", "vol_ma_20"]
     df[cols] = df[cols].bfill().ffill()
 
-    # Fibonacci swings: simple last-N-bar high/low
+    # Fibonacci swings: simple last-N-bar high/low (still computed for future use)
     N = 50
     df["swing_low"] = df["low"].rolling(N).min()
     df["swing_high"] = df["high"].rolling(N).max()
