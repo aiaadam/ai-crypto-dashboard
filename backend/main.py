@@ -53,7 +53,6 @@ def test_route():
 # -------------------------------
 # CryptoCompare OHLC data (no auth for free tier basic use)
 # -------------------------------
-# Docs: https://min-api.cryptocompare.com/  [web:370][web:376]
 
 CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
 
@@ -89,7 +88,6 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
     fsym, tsym = SYMBOL_MAP[symbol]
     cfg = INTERVAL_CONFIG.get(interval)
     if cfg is None:
-        # default fallback
         cfg = INTERVAL_CONFIG["1m"]
     endpoint, aggregate = cfg
 
@@ -137,7 +135,7 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal
+# Rule-based signal + Fibonacci
 # -------------------------------
 
 def generate_signal(row, interval: str = "1h"):
@@ -150,53 +148,94 @@ def generate_signal(row, interval: str = "1h"):
     bb_high = row["bb_high"]
     bb_low = row["bb_low"]
 
+    # Optional swing/Fibo info (pre‑computed per row)
+    swing_low = row.get("swing_low", None)
+    swing_high = row.get("swing_high", None)
+
     uptrend = close > ema_200
     downtrend = close < ema_200
 
-    # ---- slightly stricter timeframe tuning ----
-    if interval in ["1m", "3m", "5m"]:
+    # ----- PARAMS PER TIMEFRAME -----
+    if interval in ["1m"]:
+        # 1m: not super strict, but avoid spam
+        rsi_buy_max = 45      # oversold-ish
+        rsi_sell_min = 55     # overbought-ish
+        band_lo_mult = 1.00
+        band_hi_mult = 1.00
+        require_trend = True          # trade with EMA200 trend
+        require_macd_cross = False
+    elif interval in ["5m", "15m"]:
         rsi_buy_max = 50
         rsi_sell_min = 50
-        band_lo_mult = 1.01
-        band_hi_mult = 0.99
-    elif interval in ["15m", "30m", "1h"]:
-        rsi_buy_max = 45
-        rsi_sell_min = 55
         band_lo_mult = 1.00
         band_hi_mult = 1.00
+        require_trend = True
+        require_macd_cross = False
+    elif interval in ["30m", "1h"]:
+        rsi_buy_max = 55
+        rsi_sell_min = 45
+        band_lo_mult = 1.00
+        band_hi_mult = 1.00
+        require_trend = False
+        require_macd_cross = False
     else:  # 4h, 1d etc.
-        rsi_buy_max = 40
-        rsi_sell_min = 60
+        rsi_buy_max = 60
+        rsi_sell_min = 40
         band_lo_mult = 1.00
         band_hi_mult = 1.00
+        require_trend = False
+        require_macd_cross = False
 
-    # BUY
+    # ----- FIBONACCI RETRACEMENT ZONES -----
+    fib_buy_ok = True
+    fib_sell_ok = True
+
+    if swing_low is not None and swing_high is not None:
+        diff = swing_high - swing_low
+        if diff > 0:
+            # Uptrend pullback zone (38.2–61.8%)
+            fib_382 = swing_high - 0.382 * diff
+            fib_618 = swing_high - 0.618 * diff
+            fib_buy_ok = fib_618 <= close <= fib_382
+
+            # Downtrend pullback zone (mirrored)
+            fib_382_d = swing_low + 0.382 * diff
+            fib_618_d = swing_low + 0.618 * diff
+            fib_sell_ok = fib_382_d <= close <= fib_618_d
+
+    # ----- BUY RULES -----
     if (
-        uptrend
+        (not require_trend or uptrend)
         and close > ema_50
-        and macd > macd_signal
         and rsi < rsi_buy_max
+        and macd >= macd_signal
+        and fib_buy_ok
     ):
         return "BUY"
 
     if (
         rsi < rsi_buy_max
         and close <= bb_low * band_lo_mult
+        and (not require_trend or uptrend)
+        and fib_buy_ok
     ):
         return "BUY"
 
-    # SELL
+    # ----- SELL RULES -----
     if (
-        downtrend
+        (not require_trend or downtrend)
         and close < ema_50
-        and macd < macd_signal
         and rsi > rsi_sell_min
+        and macd <= macd_signal
+        and fib_sell_ok
     ):
         return "SELL"
 
     if (
         rsi > rsi_sell_min
         and close >= bb_high * band_hi_mult
+        and (not require_trend or downtrend)
+        and fib_sell_ok
     ):
         return "SELL"
 
@@ -275,6 +314,11 @@ def crypto(symbol: str, interval: str = Query("1h")):
     cols = ["rsi", "ema_50", "ema_200", "macd", "macd_signal",
             "bb_high", "bb_low", "vol_ma_20"]
     df[cols] = df[cols].bfill().ffill()
+
+    # Fibonacci swings: simple last-N-bar high/low
+    N = 50
+    df["swing_low"] = df["low"].rolling(N).min()
+    df["swing_high"] = df["high"].rolling(N).max()
 
     df["signal"] = df.apply(lambda row: generate_signal(row, interval), axis=1)
 
