@@ -72,11 +72,6 @@ INTERVAL_CONFIG = {
 
 
 def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
-    """
-    Fetch OHLCV from CryptoCompare.
-    Returns a list shaped like Binance/CoinGecko klines:
-    [time_ms, open, high, low, close, volume, ...]
-    """
     symbol = symbol.upper()
     if symbol not in SYMBOL_MAP:
         raise ValueError(f"Unsupported symbol for CryptoCompare: {symbol}")
@@ -131,7 +126,7 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal (momentum-focused)
+# Rule-based signal (RSI+MACD "clever mind")
 # -------------------------------
 
 def generate_signal(row, interval: str = "1h"):
@@ -144,64 +139,113 @@ def generate_signal(row, interval: str = "1h"):
     bb_high = row["bb_high"]
     bb_low = row["bb_low"]
 
-    # Medium‑term trend from EMAs (for pullbacks)
+    # Trend from EMAs (soft filter, not strict)
     ema_uptrend = ema_50 > ema_200
     ema_downtrend = ema_50 < ema_200
 
-    # Short‑term trend via RSI 50 line (reactive)
-    rsi_up = rsi > 50
-    rsi_down = rsi < 50
+    # RSI zones (flexible)
+    #  - 40–60 = neutral but can still buy/sell with MACD confluence
+    #  - <40 = weak / bearish zone
+    #  - >60 = stronger bullish zone
+    rsi_bullish_zone = rsi >= 40
+    rsi_strong_bull = rsi >= 55
+    rsi_bearish_zone = rsi <= 60
+    rsi_strong_bear = rsi <= 45
 
-    # Momentum from MACD
+    # MACD confluence: direction + strength
     macd_bull = macd > macd_signal
     macd_bear = macd < macd_signal
 
-    # OB/OS guards per timeframe
+    # Use MACD distance from signal to judge conviction
+    macd_diff = macd - macd_signal
+
+    # Timeframe‑specific sensitivity
     if interval == "1m":
-        rsi_ob = 75   # overbought guard
-        rsi_os = 25   # oversold guard
+        macd_trend_min = 0.0       # very sensitive on 1m
+        macd_strong = 0.0005       # strong MACD separation
     elif interval in ["5m", "15m"]:
-        rsi_ob = 80
-        rsi_os = 20
+        macd_trend_min = 0.0
+        macd_strong = 0.0008
     else:
-        rsi_ob = 85
-        rsi_os = 15
+        macd_trend_min = 0.0
+        macd_strong = 0.0010
+
+    strong_macd_up = macd_diff > macd_strong
+    strong_macd_down = macd_diff < -macd_strong
+
+    # Bands just for extra context (not strict)
+    near_lower_band = bb_low is not None and bb_low > 0 and close <= bb_low
+    near_upper_band = bb_high is not None and bb_high > 0 and close >= bb_high
 
     # ---------------- BUY LOGIC ----------------
-    # 1) Aggressive continuation BUY: RSI above 50 + MACD bullish
+    # Main idea:
+    #  - Buy when RSI and MACD agree UP (confluence).
+    #  - Allow buys even from RSI ~40 if MACD is clearly bullish.
+    #  - Slight bias to buy in EMA uptrend.
+
+    # 1) Strong buy: everything aligned
     if (
-        rsi_up
+        rsi_strong_bull           # RSI > ~55
         and macd_bull
-        and rsi < rsi_ob
+        and strong_macd_up
+        and (ema_uptrend or not ema_downtrend)  # prefer longs when ema not clearly down
     ):
         return "BUY"
 
-    # 2) Pullback BUY: in EMA uptrend, price near lower band, RSI not in a crash
+    # 2) Normal buy: RSI bull zone (>=40) + MACD bullish
     if (
-        ema_uptrend
-        and close <= bb_low
-        and rsi > rsi_os
+        rsi_bullish_zone
+        and macd_bull
+        and macd_diff > macd_trend_min
     ):
+        # If price is at upper band and RSI very high, skip greed
+        if near_upper_band and rsi > 70:
+            # overextended, better not chase
+            return "HOLD"
         return "BUY"
 
     # ---------------- SELL LOGIC ---------------
-    # 1) Aggressive continuation SELL: RSI below 50 + MACD bearish
+    # Main idea:
+    #  - Sell when RSI and MACD agree DOWN.
+    #  - Slight bias to sell when EMA downtrend.
+    #  - If RSI very weak and MACD strong down, allow aggressive sell.
+
+    # 1) Strong sell: everything aligned
     if (
-        rsi_down
+        rsi_strong_bear            # RSI < ~45
         and macd_bear
-        and rsi > rsi_os
+        and strong_macd_down
+        and (ema_downtrend or not ema_uptrend)
     ):
         return "SELL"
 
-    # 2) Pullback SELL: in EMA downtrend, price near upper band
+    # 2) Normal sell: RSI bear zone (<=60) + MACD bearish
     if (
-        ema_downtrend
-        and close >= bb_high
-        and rsi < rsi_ob
+        rsi_bearish_zone
+        and macd_bear
+        and macd_diff < -macd_trend_min
     ):
+        # If price is at lower band and RSI <30, avoid panic short
+        if near_lower_band and rsi < 30:
+            return "HOLD"
         return "SELL"
 
-    # Otherwise HOLD
+    # ---------------- DISAGREEMENT HANDLING ---------------
+    # If RSI and MACD disagree, prefer HOLD or mild counter‑signal.
+
+    # RSI bullish but MACD mildly bearish: market pausing → HOLD
+    if rsi >= 55 and macd_bear:
+        return "HOLD"
+
+    # RSI bearish but MACD mildly bullish: possible squeeze → HOLD
+    if rsi <= 45 and macd_bull:
+        return "HOLD"
+
+    # In middle zone (40–60) and MACD is tiny (no conviction)
+    if 40 <= rsi <= 60 and abs(macd_diff) < macd_strong:
+        return "HOLD"
+
+    # Default
     return "HOLD"
 
 
