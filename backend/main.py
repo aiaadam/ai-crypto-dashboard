@@ -178,11 +178,6 @@ def generate_signal(row, interval: str = "1h"):
     near_upper_band = bb_high is not None and bb_high > 0 and close >= bb_high
 
     # ---------------- BUY LOGIC ----------------
-    # Main idea:
-    #  - Buy when RSI and MACD agree UP (confluence).
-    #  - Allow buys even from RSI ~40 if MACD is clearly bullish.
-    #  - Slight bias to buy in EMA uptrend.
-
     # 1) Strong buy: everything aligned
     if (
         rsi_strong_bull           # RSI > ~55
@@ -205,11 +200,6 @@ def generate_signal(row, interval: str = "1h"):
         return "BUY"
 
     # ---------------- SELL LOGIC ---------------
-    # Main idea:
-    #  - Sell when RSI and MACD agree DOWN.
-    #  - Slight bias to sell when EMA downtrend.
-    #  - If RSI very weak and MACD strong down, allow aggressive sell.
-
     # 1) Strong sell: everything aligned
     if (
         rsi_strong_bear            # RSI < ~45
@@ -231,8 +221,6 @@ def generate_signal(row, interval: str = "1h"):
         return "SELL"
 
     # ---------------- DISAGREEMENT HANDLING ---------------
-    # If RSI and MACD disagree, prefer HOLD or mild counter‑signal.
-
     # RSI bullish but MACD mildly bearish: market pausing → HOLD
     if rsi >= 55 and macd_bear:
         return "HOLD"
@@ -425,8 +413,45 @@ def map_label_to_signal(label: int) -> str:
     return "BUY"
 
 
+def map_proba_to_signal(p_sell: float, p_buy: float, risk: str) -> str:
+    """
+    Convert model probabilities into BUY/SELL/HOLD based on risk mode.
+    Assumes binary classifier with classes [-1 (SELL), +1 (BUY)].
+    """
+    # Risk-dependent thresholds
+    if risk == "risky":
+        buy_th = 0.55
+        sell_th = 0.55
+        hold_gap = 0.05   # small gap → fewer holds
+    elif risk == "strict":
+        buy_th = 0.75
+        sell_th = 0.75
+        hold_gap = 0.20   # big gap → more holds when unsure
+    else:  # "medium" default
+        buy_th = 0.65
+        sell_th = 0.65
+        hold_gap = 0.10
+
+    # Prefer side with higher probability when above threshold
+    if p_buy >= buy_th and (p_buy - p_sell) >= hold_gap:
+        return "BUY"
+    if p_sell >= sell_th and (p_sell - p_buy) >= hold_gap:
+        return "SELL"
+
+    # If neither side is clearly better, HOLD
+    return "HOLD"
+
+
 @app.get("/predict/{symbol}")
-def predict(symbol: str):
+def predict(symbol: str, risk: str = Query("medium")):
+    """
+    AI-based prediction endpoint.
+
+    risk: "risky" | "medium" | "strict"
+    - risky  -> lower thresholds, more trades
+    - medium -> balanced
+    - strict -> higher thresholds, fewer but higher-confidence trades
+    """
     if ml_model is None:
         return {
             "ok": False,
@@ -435,6 +460,11 @@ def predict(symbol: str):
             "prediction": "HOLD",
             "info": "ML model not loaded",
         }
+
+    # normalize risk
+    risk = risk.lower()
+    if risk not in ("risky", "medium", "strict"):
+        risk = "medium"
 
     interval = ml_interval or "15m"
 
@@ -478,14 +508,48 @@ def predict(symbol: str):
 
     latest = df.iloc[-1]
     X = latest[ml_feature_cols].values.reshape(1, -1)
-    label = int(ml_model.predict(X)[0])
-    pred_signal = map_label_to_signal(label)
+
+    # Get raw class prediction
+    try:
+        label = int(ml_model.predict(X)[0])
+    except Exception as e:
+        print(f"[ML] predict failed: {e}")
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "prediction": "HOLD",
+            "info": "ML predict error",
+        }
+
+    # Default mapping using label (fallback)
+    base_signal = map_label_to_signal(label)
+
+    # Try to use probabilities for risk-based decision
+    p_buy = None
+    p_sell = None
+    final_signal = base_signal
+    try:
+        proba = ml_model.predict_proba(X)[0]
+        # Assume classes are [-1, +1] in that order or use model.classes_
+        classes = list(ml_model.classes_)
+        # Map class index to prob
+        class_to_proba = {cls: p for cls, p in zip(classes, proba)}
+        p_sell = float(class_to_proba.get(-1, 0.0))
+        p_buy = float(class_to_proba.get(1, 0.0))
+
+        final_signal = map_proba_to_signal(p_sell, p_buy, risk)
+    except Exception as e:
+        print(f"[ML] predict_proba not available or failed: {e}")
 
     return {
         "ok": True,
         "symbol": symbol.upper(),
         "interval": interval,
-        "prediction": pred_signal,
+        "prediction": final_signal,
         "raw_label": label,
+        "p_buy": p_buy,
+        "p_sell": p_sell,
+        "risk": risk,
         "time": int(latest["time"]),
     }
