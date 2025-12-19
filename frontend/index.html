@@ -74,6 +74,19 @@
           </select>
         </div>
 
+        <!-- NEW: Risk mode selector for ML -->
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">AI Risk mode</label>
+          <select
+            id="risk-mode"
+            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="risky">Risky</option>
+            <option value="medium" selected>Medium</option>
+            <option value="strict">Strict</option>
+          </select>
+        </div>
+
         <button
           id="updateBtn"
           class="bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold px-4 py-2 rounded-lg transition"
@@ -282,6 +295,9 @@
     const mlDot = document.getElementById("mlDot");
     const mlText = document.getElementById("mlText");
 
+    // NEW: risk mode select (for ML)
+    const riskModeSelect = document.getElementById("risk-mode");
+
     const riskAccount = document.getElementById("riskAccount");
     const riskPercent = document.getElementById("riskPercent");
     const riskEntry = document.getElementById("riskEntry");
@@ -384,7 +400,8 @@
 
     async function fetchMlPrediction() {
       const symbol = symbolInput.value.trim().toUpperCase();
-      const url = `${apiBase}/predict/${symbol}`;
+      const risk = riskModeSelect ? riskModeSelect.value : "medium";
+      const url = `${apiBase}/predict/${symbol}?risk=${encodeURIComponent(risk)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error("ML API error " + res.status);
       return res.json();
@@ -438,6 +455,13 @@
     symbolInput.addEventListener("keyup", (e) => {
       if (e.key === "Enter") refreshSignals();
     });
+
+    // Optional: when risk mode changes, immediately refresh ML prediction
+    if (riskModeSelect) {
+      riskModeSelect.addEventListener("change", () => {
+        refreshSignals();
+      });
+    }
 
     function calcRisk() {
       const account = parseFloat(riskAccount.value);
