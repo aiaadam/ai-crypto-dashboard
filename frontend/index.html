@@ -257,6 +257,9 @@
         paypal.me/Aadam800
       </a>
     </div>
+    <div>
+      Contact me: <span class="text-slate-200">07506254663</span>
+    </div>
   </div>
 
   <script>
@@ -393,7 +396,7 @@
         updateBtn.textContent = "Loading...";
 
         const [data, ml] = await Promise.all([
-          fetchSignals(),       // uses intervalSelect.value
+          fetchSignals(),
           fetchMlPrediction(),
         ]);
 
