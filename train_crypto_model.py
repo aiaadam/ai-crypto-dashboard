@@ -10,14 +10,14 @@ import joblib
 # ----------------------------
 # CONFIG
 # ----------------------------
-DATA_CSV = "data/btcusdt_15m.csv"  # <-- change to your actual CSV path
+DATA_CSV = "data/btcusdt_15m.csv"
 INTERVAL = "15m"
 
 TP_PCT = 0.01   # +1% take profit
 SL_PCT = 0.005  # -0.5% stop loss
-LOOKAHEAD = 48  # number of future bars to check (e.g. next 48 * 15m = 12h)
+LOOKAHEAD = 48  # next 48 bars (~12h on 15m)
 
-N_SPLITS = 3    # time-series CV splits for quick sanity check
+N_SPLITS = 3
 N_ESTIMATORS = 300
 RANDOM_STATE = 42
 
@@ -25,29 +25,20 @@ MODEL_PATH = "models/crypto_model.pkl"
 
 
 def load_data(path: str) -> pd.DataFrame:
-    """
-    Expects CSV with at least: time, open, high, low, close, volume.
-    time can be in seconds or ms; it will be normalized to seconds.
-    """
     df = pd.read_csv(path)
-
-    # Normalize column names
     df.columns = [c.lower() for c in df.columns]
 
-    # Try to coerce required columns
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
 
-    # time
     if "time" in df.columns:
         t = df["time"].astype(float)
-        # Heuristic: if it's ms, divide by 1000
+        # CryptoCompare already gives seconds, but keep the check
         if t.max() > 1e11:
             df["time"] = (t // 1000).astype(int)
         else:
             df["time"] = t.astype(int)
     else:
-        # create a simple index-based time if missing
         df["time"] = np.arange(len(df))
 
     df = df.sort_values("time").reset_index(drop=True)
@@ -75,7 +66,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["dist_ema_20"] = df["close"] / ema20 - 1
     df["dist_ema_50"] = df["close"] / ema50 - 1
 
-    # EMA slopes (trend strength)
+    # EMA slopes
     df["ema_20_slope"] = ema20.pct_change(5)
     df["ema_50_slope"] = ema50.pct_change(5)
 
@@ -104,7 +95,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["vol_ma_20"] = df["volume"].rolling(20).mean()
     df["vol_rel"] = df["volume"] / df["vol_ma_20"]
 
-    # Drop rows with NaNs caused by indicators
     df = df.dropna().reset_index(drop=True)
     return df
 
@@ -116,7 +106,7 @@ def create_tp_sl_labels(df: pd.DataFrame,
     """
     For each row i, look ahead up to lookahead bars and:
       - If price hits +tp_pct before -sl_pct: label = 1 (good long)
-      - If price hits -sl_pct first (or neither): label = 0
+      - Else: label = 0
     """
     close = df["close"].values
     n = len(df)
@@ -127,7 +117,6 @@ def create_tp_sl_labels(df: pd.DataFrame,
         tp = entry * (1.0 + tp_pct)
         sl = entry * (1.0 - sl_pct)
 
-        # Look forward
         hit_tp = False
         hit_sl = False
         end = min(n, i + lookahead + 1)
@@ -159,28 +148,21 @@ def main():
     print("[TRAIN] Rows after features/dropna:", len(df_feat))
 
     if len(df_feat) == 0:
-        print("[TRAIN] No usable rows after feature engineering. "
-              "You need a CSV with many valid candles (time, open, high, low, close, volume).")
+        print("[TRAIN] No usable rows – need real candle data in", DATA_CSV)
         return
 
     print("[TRAIN] Creating TP/SL labels...")
     labels = create_tp_sl_labels(df_raw.loc[df_feat.index], TP_PCT, SL_PCT, LOOKAHEAD)
     df_feat["label"] = labels
 
-    # Features and target
     feature_cols = [c for c in df_feat.columns if c not in ("time", "label")]
     X = df_feat[feature_cols].values
     y = df_feat["label"].values
 
     print("[TRAIN] Feature shape:", X.shape, "Labels shape:", y.shape)
 
-    if len(df_feat) < 1000:
-        print(f"[TRAIN] Warning: very few samples ({len(df_feat)}). "
-              "Model quality will be poor; get more history.")
-
-    # Quick time-series CV to sanity check, only if enough data
-    if len(df_feat) > N_SPLITS:
-        tscv = TimeSeriesSplit(n_splits=min(N_SPLITS, len(df_feat) - 1))
+    if len(df_feat) > 1000:
+        tscv = TimeSeriesSplit(n_splits=N_SPLITS)
         for fold, (train_idx, test_idx) in enumerate(tscv.split(X), 1):
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
@@ -198,9 +180,8 @@ def main():
             print(f"\n[TRAIN] Fold {fold} classification report:")
             print(classification_report(y_test, y_pred, digits=3))
     else:
-        print("[TRAIN] Not enough data for cross-validation; training on all data directly.")
+        print("[TRAIN] Not enough data for CV; training on all data.")
 
-    # Train final model on all data
     print("[TRAIN] Fitting final model on all data...")
     final_model = RandomForestClassifier(
         n_estimators=N_ESTIMATORS,

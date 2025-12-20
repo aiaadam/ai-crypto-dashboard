@@ -4,11 +4,12 @@ from fastapi.staticfiles import StaticFiles
 import requests
 import pandas as pd
 import ta
+import joblib
 import os
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.2.0",
+    version="0.3.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -16,7 +17,7 @@ app = FastAPI(
 
 # CORS
 origins = [
-    "https://aiautotrades.onrender.com",  # your frontend
+    "https://aiautotrades.onrender.com",
     "http://localhost",
     "http://localhost:8000",
 ]
@@ -37,7 +38,7 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
 @app.get("/", include_in_schema=False)
-def serve_dashboard():
+def root():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
 
 
@@ -50,7 +51,7 @@ def test_route():
 # CryptoCompare OHLC data
 # -------------------------------
 
-CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
+CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com/data/v2"
 
 SYMBOL_MAP = {
     "BTCUSDT": ("BTC", "USDT"),
@@ -79,7 +80,7 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
         cfg = INTERVAL_CONFIG["1m"]
     endpoint, aggregate = cfg
 
-    url = f"{CRYPTOCOMPARE_BASE}/data/v2/{endpoint}"
+    url = f"{CRYPTOCOMPARE_BASE}/{endpoint}"
     params = {
         "fsym": fsym,
         "tsym": tsym,
@@ -123,16 +124,10 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
 
 
 # -------------------------------
-# Rule-based signal (RSI+MACD brain)
+# Rule-based signal (chart signals)
 # -------------------------------
 
-def generate_signal(row, interval: str, strictness: float):
-    """
-    strictness in [0,1]:
-    - 0.0 = very aggressive (lots of trades)
-    - 0.5 = medium
-    - 1.0 = very strict (only strong setups)
-    """
+def generate_signal(row, interval: str = "1h"):
     close = row["close"]
     ema_50 = row["ema_50"]
     ema_200 = row["ema_200"]
@@ -143,50 +138,39 @@ def generate_signal(row, interval: str, strictness: float):
     bb_low = row["bb_low"]
     atr_perc = row.get("atr_perc", 0.0)
 
-    # Trend from EMAs
     ema_uptrend = ema_50 > ema_200
     ema_downtrend = ema_50 < ema_200
 
-    # RSI zones
     rsi_bullish_zone = rsi >= 40
     rsi_strong_bull = rsi >= 55
     rsi_bearish_zone = rsi <= 60
     rsi_strong_bear = rsi <= 45
 
-    # MACD
     macd_bull = macd > macd_signal
     macd_bear = macd < macd_signal
     macd_diff = macd - macd_signal
 
-    # Timeframe‑specific base sensitivity
+    # base sensitivity
     if interval == "1m":
-        base_macd_strong = 0.0005
-        base_min_vol = 0.001
+        macd_strong = 0.0005
+        min_vol = 0.001
     elif interval in ["5m", "15m"]:
-        base_macd_strong = 0.0008
-        base_min_vol = 0.0008
+        macd_strong = 0.0008
+        min_vol = 0.0008
     else:
-        base_macd_strong = 0.0010
-        base_min_vol = 0.0005
-
-    # Adjust sensitivity by strictness
-    # stricter = require stronger MACD and more volatility
-    macd_strong = base_macd_strong * (1.0 + strictness)
-    min_vol = base_min_vol * (1.0 + 0.5 * strictness)
+        macd_strong = 0.0010
+        min_vol = 0.0005
 
     strong_macd_up = macd_diff > macd_strong
     strong_macd_down = macd_diff < -macd_strong
 
-    # Bands
     near_lower_band = bb_low is not None and bb_low > 0 and close <= bb_low
     near_upper_band = bb_high is not None and bb_high > 0 and close >= bb_high
 
-    # Volatility guard: if ultra-low vol and strict, avoid trades
-    if strictness > 0.5 and atr_perc is not None and atr_perc < min_vol:
+    if atr_perc is not None and atr_perc < min_vol:
         return "HOLD"
 
-    # ---------------- BUY LOGIC ----------------
-    # Strong buy
+    # BUY
     if (
         rsi_strong_bull
         and macd_bull
@@ -195,18 +179,16 @@ def generate_signal(row, interval: str, strictness: float):
     ):
         return "BUY"
 
-    # Normal buy: RSI bull zone + MACD bullish
     if (
         rsi_bullish_zone
         and macd_bull
         and macd_diff > 0
     ):
-        if near_upper_band and rsi > 70 and strictness > 0.3:
+        if near_upper_band and rsi > 70:
             return "HOLD"
         return "BUY"
 
-    # ---------------- SELL LOGIC ---------------
-    # Strong sell
+    # SELL
     if (
         rsi_strong_bear
         and macd_bear
@@ -215,27 +197,16 @@ def generate_signal(row, interval: str, strictness: float):
     ):
         return "SELL"
 
-    # Normal sell
     if (
         rsi_bearish_zone
         and macd_bear
         and macd_diff < 0
     ):
-        if near_lower_band and rsi < 30 and strictness > 0.3:
+        if near_lower_band and rsi < 30:
             return "HOLD"
         return "SELL"
 
-    # Disagreement / no clear edge
     return "HOLD"
-
-
-def strictness_from_risk(risk: str) -> float:
-    risk = (risk or "medium").lower()
-    if risk == "risky":
-        return 0.0
-    if risk == "strict":
-        return 1.0
-    return 0.5
 
 
 @app.get("/crypto/{symbol}")
@@ -283,7 +254,6 @@ def crypto(symbol: str, interval: str = Query("1h")):
     df["close"] = df["close"].astype(float)
     df["volume"] = df["volume"].astype(float)
 
-    # Indicators
     df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
     df["ema_200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
@@ -305,7 +275,6 @@ def crypto(symbol: str, interval: str = Query("1h")):
     df["bb_high"] = bb_ind.bollinger_hband()
     df["bb_low"] = bb_ind.bollinger_lband()
 
-    # Volatility
     atr_ind = ta.volatility.AverageTrueRange(
         high=df["high"],
         low=df["low"],
@@ -321,9 +290,7 @@ def crypto(symbol: str, interval: str = Query("1h")):
             "bb_high", "bb_low", "vol_ma_20", "atr", "atr_perc"]
     df[cols] = df[cols].bfill().ffill()
 
-    # Default risk strictness = medium
-    strictness = strictness_from_risk("medium")
-    df["signal"] = df.apply(lambda row: generate_signal(row, interval, strictness), axis=1)
+    df["signal"] = df.apply(lambda row: generate_signal(row, interval), axis=1)
 
     return {
         "ok": True,
@@ -339,20 +306,135 @@ def crypto(symbol: str, interval: str = Query("1h")):
 
 
 # -------------------------------
-# Simple "AI" prediction endpoint with risk
+# ML model: load + predict
 # -------------------------------
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "crypto_model.pkl")
+ml_model = None
+ml_feature_cols = None
+ml_interval = None
+
+
+def load_model():
+    global ml_model, ml_feature_cols, ml_interval
+    try:
+        if not os.path.exists(MODEL_PATH):
+            print(f"[ML] Model file not found at {MODEL_PATH}")
+            return
+        bundle = joblib.load(MODEL_PATH)
+        ml_model = bundle["model"]
+        ml_feature_cols = bundle["feature_cols"]
+        ml_interval = bundle["interval"]
+        print(f"[ML] Loaded model from {MODEL_PATH} (interval={ml_interval})")
+    except Exception as e:
+        print(f"[ML] Failed to load model: {e}")
+        ml_model = None
+        ml_feature_cols = None
+        ml_interval = None
+
+
+load_model()
+
+
+def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    df["time"] = df["time"] // 1000
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+
+    df["ret_1"] = df["close"].pct_change()
+    df["ret_3"] = df["close"].pct_change(3)
+    df["ret_6"] = df["close"].pct_change(6)
+    df["ret_12"] = df["close"].pct_change(12)
+    df["ret_24"] = df["close"].pct_change(24)
+
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+
+    ema20 = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
+    ema50 = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+    df["ema_20"] = ema20
+    df["ema_50"] = ema50
+    df["dist_ema_20"] = df["close"] / ema20 - 1
+    df["dist_ema_50"] = df["close"] / ema50 - 1
+
+    df["ema_20_slope"] = ema20.pct_change(5)
+    df["ema_50_slope"] = ema50.pct_change(5)
+
+    macd_ind = ta.trend.MACD(
+        close=df["close"],
+        window_slow=26,
+        window_fast=12,
+        window_sign=9,
+    )
+    df["macd"] = macd_ind.macd()
+    df["macd_signal"] = macd_ind.macd_signal()
+    df["macd_hist"] = macd_ind.macd_diff()
+
+    bb_ind = ta.volatility.BollingerBands(
+        close=df["close"],
+        window=20,
+        window_dev=2,
+    )
+    df["bb_high"] = bb_ind.bollinger_hband()
+    df["bb_low"] = bb_ind.bollinger_lband()
+    df["bb_width"] = (df["bb_high"] - df["bb_low"]) / df["close"]
+
+    df["vol_ma_20"] = df["volume"].rolling(20).mean()
+    df["vol_rel"] = df["volume"] / df["vol_ma_20"]
+
+    df = df.dropna().reset_index(drop=True)
+    return df
+
+
+def map_proba_to_signal(p_good: float, risk: str) -> str:
+    """
+    p_good = probability this is a good long (TP before SL).
+    """
+    risk = risk.lower()
+    if risk == "risky":
+        buy_th = 0.55
+        hold_th = 0.50
+    elif risk == "strict":
+        buy_th = 0.75
+        hold_th = 0.60
+    else:  # medium
+        buy_th = 0.65
+        hold_th = 0.55
+
+    if p_good >= buy_th:
+        return "BUY"
+    if p_good >= hold_th:
+        return "HOLD"
+    return "SELL"
+
 
 @app.get("/predict/{symbol}")
 def predict(symbol: str, risk: str = Query("medium")):
     """
-    Uses the same indicator brain but applies a different strictness
-    based on risk: "risky" | "medium" | "strict".
+    AI-based prediction endpoint using trained TP/SL model.
+    risk: "risky" | "medium" | "strict"
     """
-    interval = "15m"
-    strictness = strictness_from_risk(risk)
+    if ml_model is None:
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "interval": ml_interval or "15m",
+            "prediction": "HOLD",
+            "info": "ML model not loaded",
+        }
 
-    data = get_klines(symbol.upper(), interval=interval, limit=300)
-    if not data:
+    risk = risk.lower()
+    if risk not in ("risky", "medium", "strict"):
+        risk = "medium"
+
+    interval = ml_interval or "15m"
+
+    raw = get_klines(symbol.upper(), interval=interval, limit=300)
+    if not raw:
         return {
             "ok": False,
             "symbol": symbol.upper(),
@@ -362,7 +444,7 @@ def predict(symbol: str, risk: str = Query("medium")):
         }
 
     df = pd.DataFrame(
-        data,
+        raw,
         columns=[
             "time",
             "open",
@@ -378,63 +460,45 @@ def predict(symbol: str, risk: str = Query("medium")):
             "_6",
         ],
     )
+    df = build_ml_features(df)
 
-    df["time"] = df["time"] // 1000
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["close"] = df["close"].astype(float)
-    df["volume"] = df["volume"].astype(float)
-
-    # Indicators
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
-    df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
-    df["ema_200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
-
-    macd_ind = ta.trend.MACD(
-        close=df["close"],
-        window_slow=26,
-        window_fast=12,
-        window_sign=9,
-    )
-    df["macd"] = macd_ind.macd()
-    df["macd_signal"] = macd_ind.macd_signal()
-
-    bb_ind = ta.volatility.BollingerBands(
-        close=df["close"],
-        window=20,
-        window_dev=2,
-    )
-    df["bb_high"] = bb_ind.bollinger_hband()
-    df["bb_low"] = bb_ind.bollinger_lband()
-
-    atr_ind = ta.volatility.AverageTrueRange(
-        high=df["high"],
-        low=df["low"],
-        close=df["close"],
-        window=14,
-    )
-    df["atr"] = atr_ind.average_true_range()
-    df["atr_perc"] = df["atr"] / df["close"]
-
-    df = df.dropna()
     if len(df) == 0:
         return {
             "ok": False,
             "symbol": symbol.upper(),
             "interval": interval,
             "prediction": "HOLD",
-            "info": "Not enough data after indicators",
+            "info": "Not enough data for features",
         }
 
     latest = df.iloc[-1]
-    pred_signal = generate_signal(latest, interval, strictness)
+    X = latest[ml_feature_cols].values.reshape(1, -1)
+
+    try:
+        proba = ml_model.predict_proba(X)[0]
+    except Exception as e:
+        print(f"[ML] predict_proba failed: {e}")
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "prediction": "HOLD",
+            "info": "ML predict_proba error",
+        }
+
+    # Binary classifier: class 1 = good long, class 0 = not good
+    classes = list(ml_model.classes_)
+    class_to_proba = {cls: p for cls, p in zip(classes, proba)}
+    p_good = float(class_to_proba.get(1, 0.0))
+
+    final_signal = map_proba_to_signal(p_good, risk)
 
     return {
         "ok": True,
         "symbol": symbol.upper(),
         "interval": interval,
-        "prediction": pred_signal,
-        "risk": risk.lower(),
+        "prediction": final_signal,
+        "p_good": p_good,
+        "risk": risk,
         "time": int(latest["time"]),
     }
