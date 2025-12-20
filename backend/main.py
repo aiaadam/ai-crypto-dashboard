@@ -9,7 +9,7 @@ import os
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.3.0",
+    version="0.4.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -150,7 +150,6 @@ def generate_signal(row, interval: str = "1h"):
     macd_bear = macd < macd_signal
     macd_diff = macd - macd_signal
 
-    # base sensitivity
     if interval == "1m":
         macd_strong = 0.0005
         min_vol = 0.001
@@ -306,34 +305,38 @@ def crypto(symbol: str, interval: str = Query("1h")):
 
 
 # -------------------------------
-# ML model: load + predict
+# ML models: load + predict
 # -------------------------------
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "crypto_model.pkl")
-ml_model = None
-ml_feature_cols = None
-ml_interval = None
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
+MODEL_PATHS = {
+    "1m": os.path.join(MODEL_DIR, "crypto_model_1m.pkl"),
+    "5m": os.path.join(MODEL_DIR, "crypto_model_5m.pkl"),
+    "15m": os.path.join(MODEL_DIR, "crypto_model_15m.pkl"),
+}
+
+ml_bundles = {}  # timeframe -> {"model": ..., "feature_cols": [...], "interval": "1m/5m/15m"}
 
 
-def load_model():
-    global ml_model, ml_feature_cols, ml_interval
-    try:
-        if not os.path.exists(MODEL_PATH):
-            print(f"[ML] Model file not found at {MODEL_PATH}")
-            return
-        bundle = joblib.load(MODEL_PATH)
-        ml_model = bundle["model"]
-        ml_feature_cols = bundle["feature_cols"]
-        ml_interval = bundle["interval"]
-        print(f"[ML] Loaded model from {MODEL_PATH} (interval={ml_interval})")
-    except Exception as e:
-        print(f"[ML] Failed to load model: {e}")
-        ml_model = None
-        ml_feature_cols = None
-        ml_interval = None
+def load_models():
+    global ml_bundles
+    for tf, path in MODEL_PATHS.items():
+        try:
+            if not os.path.exists(path):
+                print(f"[ML] Model file for {tf} not found at {path}")
+                continue
+            bundle = joblib.load(path)
+            ml_bundles[tf] = {
+                "model": bundle["model"],
+                "feature_cols": bundle["feature_cols"],
+                "interval": bundle.get("interval", tf),
+            }
+            print(f"[ML] Loaded {tf} model from {path}")
+        except Exception as e:
+            print(f"[ML] Failed to load {tf} model from {path}: {e}")
 
 
-load_model()
+load_models()
 
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -391,9 +394,6 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def map_proba_to_signal(p_good: float, risk: str) -> str:
-    """
-    p_good = probability this is a good long (TP before SL).
-    """
     risk = risk.lower()
     if risk == "risky":
         buy_th = 0.55
@@ -413,25 +413,35 @@ def map_proba_to_signal(p_good: float, risk: str) -> str:
 
 
 @app.get("/predict/{symbol}")
-def predict(symbol: str, risk: str = Query("medium")):
+def predict(
+    symbol: str,
+    risk: str = Query("medium"),
+    timeframe: str = Query("15m", regex="^(1m|5m|15m)$"),
+):
     """
-    AI-based prediction endpoint using trained TP/SL model.
+    AI-based prediction using timeframe-specific TP/SL models.
     risk: "risky" | "medium" | "strict"
+    timeframe: "1m" | "5m" | "15m"
     """
-    if ml_model is None:
+    bundle = ml_bundles.get(timeframe)
+    if not bundle:
         return {
             "ok": False,
             "symbol": symbol.upper(),
-            "interval": ml_interval or "15m",
+            "interval": timeframe,
             "prediction": "HOLD",
-            "info": "ML model not loaded",
+            "info": f"ML model for timeframe {timeframe} not loaded",
         }
+
+    ml_model = bundle["model"]
+    ml_feature_cols = bundle["feature_cols"]
+    ml_interval = bundle["interval"]
 
     risk = risk.lower()
     if risk not in ("risky", "medium", "strict"):
         risk = "medium"
 
-    interval = ml_interval or "15m"
+    interval = ml_interval or timeframe
 
     raw = get_klines(symbol.upper(), interval=interval, limit=300)
     if not raw:
@@ -486,7 +496,6 @@ def predict(symbol: str, risk: str = Query("medium")):
             "info": "ML predict_proba error",
         }
 
-    # Binary classifier: class 1 = good long, class 0 = not good
     classes = list(ml_model.classes_)
     class_to_proba = {cls: p for cls, p in zip(classes, proba)}
     p_good = float(class_to_proba.get(1, 0.0))

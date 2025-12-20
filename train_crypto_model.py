@@ -10,18 +10,23 @@ import joblib
 # ----------------------------
 # CONFIG
 # ----------------------------
-DATA_CSV = "data/btcusdt_15m.csv"
-INTERVAL = "15m"
+
+# timeframe name -> (csv_path, interval_string)
+TIMEFRAMES = {
+    "1m": ("data/btcusdt_1m.csv", "1m"),
+    "5m": ("data/btcusdt_5m.csv", "5m"),
+    "15m": ("data/btcusdt_15m.csv", "15m"),
+}
 
 TP_PCT = 0.01   # +1% take profit
 SL_PCT = 0.005  # -0.5% stop loss
-LOOKAHEAD = 48  # next 48 bars (~12h on 15m)
+LOOKAHEAD = 48  # next 48 bars
 
 N_SPLITS = 3
 N_ESTIMATORS = 300
 RANDOM_STATE = 42
 
-MODEL_PATH = "models/crypto_model.pkl"
+MODEL_DIR = "models"
 
 
 def load_data(path: str) -> pd.DataFrame:
@@ -33,7 +38,6 @@ def load_data(path: str) -> pd.DataFrame:
 
     if "time" in df.columns:
         t = df["time"].astype(float)
-        # CryptoCompare already gives seconds, but keep the check
         if t.max() > 1e11:
             df["time"] = (t // 1000).astype(int)
         else:
@@ -103,11 +107,6 @@ def create_tp_sl_labels(df: pd.DataFrame,
                         tp_pct: float,
                         sl_pct: float,
                         lookahead: int) -> pd.Series:
-    """
-    For each row i, look ahead up to lookahead bars and:
-      - If price hits +tp_pct before -sl_pct: label = 1 (good long)
-      - Else: label = 0
-    """
     close = df["close"].values
     n = len(df)
     labels = np.zeros(n, dtype=int)
@@ -138,20 +137,25 @@ def create_tp_sl_labels(df: pd.DataFrame,
     return pd.Series(labels, index=df.index)
 
 
-def main():
-    print("[TRAIN] Loading data from", DATA_CSV)
-    df_raw = load_data(DATA_CSV)
+def train_for_timeframe(tf_name: str, csv_path: str, interval_str: str):
+    print(f"\n==============================")
+    print(f"[TRAIN] Timeframe: {tf_name} | CSV: {csv_path}")
+    print(f"==============================")
+
+    if not os.path.exists(csv_path):
+        print(f"[TRAIN] CSV not found for {tf_name}: {csv_path} (skipping)")
+        return
+
+    df_raw = load_data(csv_path)
     print("[TRAIN] Raw rows:", len(df_raw))
 
-    print("[TRAIN] Building features...")
     df_feat = build_features(df_raw)
     print("[TRAIN] Rows after features/dropna:", len(df_feat))
 
     if len(df_feat) == 0:
-        print("[TRAIN] No usable rows – need real candle data in", DATA_CSV)
+        print(f"[TRAIN] No usable rows for {tf_name} – need real candle data in {csv_path}")
         return
 
-    print("[TRAIN] Creating TP/SL labels...")
     labels = create_tp_sl_labels(df_raw.loc[df_feat.index], TP_PCT, SL_PCT, LOOKAHEAD)
     df_feat["label"] = labels
 
@@ -177,12 +181,12 @@ def main():
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
 
-            print(f"\n[TRAIN] Fold {fold} classification report:")
+            print(f"\n[TRAIN] {tf_name} Fold {fold} classification report:")
             print(classification_report(y_test, y_pred, digits=3))
     else:
-        print("[TRAIN] Not enough data for CV; training on all data.")
+        print(f"[TRAIN] Not enough data for CV on {tf_name}; training on all data.")
 
-    print("[TRAIN] Fitting final model on all data...")
+    print(f"[TRAIN] Fitting final model on all data for {tf_name}...")
     final_model = RandomForestClassifier(
         n_estimators=N_ESTIMATORS,
         max_depth=None,
@@ -195,12 +199,18 @@ def main():
     bundle = {
         "model": final_model,
         "feature_cols": feature_cols,
-        "interval": INTERVAL,
+        "interval": interval_str,
     }
 
-    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-    joblib.dump(bundle, MODEL_PATH)
-    print(f"[TRAIN] Saved model to {MODEL_PATH}")
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    model_path = os.path.join(MODEL_DIR, f"crypto_model_{tf_name}.pkl")
+    joblib.dump(bundle, model_path)
+    print(f"[TRAIN] Saved {tf_name} model to {model_path}")
+
+
+def main():
+    for tf_name, (csv_path, interval_str) in TIMEFRAMES.items():
+        train_for_timeframe(tf_name, csv_path, interval_str)
 
 
 if __name__ == "__main__":
