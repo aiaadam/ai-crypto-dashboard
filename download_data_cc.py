@@ -4,18 +4,13 @@ import pandas as pd
 
 CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com/data/v2/histominute"
 
-# BTCUSDT on CryptoCompare = BTC vs USDT
 FSYM = "BTC"
 TSYM = "USDT"
 
-def fetch_cryptocompare_minutes(limit: int = 2000, aggregate: int = 15):
-    """
-    Fetch 15m candles (aggregate=15) from CryptoCompare.
-    Max 2000 candles per request.
-    """
+def fetch_cc(fsym: str, tsym: str, aggregate: int, limit: int = 2000) -> pd.DataFrame:
     params = {
-        "fsym": FSYM,
-        "tsym": TSYM,
+        "fsym": fsym,
+        "tsym": tsym,
         "limit": limit,
         "aggregate": aggregate,
     }
@@ -26,23 +21,32 @@ def fetch_cryptocompare_minutes(limit: int = 2000, aggregate: int = 15):
         raise RuntimeError(f"CryptoCompare error: {data.get('Message')}")
     rows = []
     for b in data["Data"]["Data"]:
-        t = int(b["time"])       # seconds since epoch
-        o = float(b["open"])
-        h = float(b["high"])
-        l = float(b["low"])
-        c = float(b["close"])
-        v = float(b["volumefrom"])
-        rows.append([t, o, h, l, c, v])
-    df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
-    return df
+        rows.append([
+            int(b["time"]),
+            float(b["open"]),
+            float(b["high"]),
+            float(b["low"]),
+            float(b["close"]),
+            float(b["volumefrom"]),
+        ])
+    return pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
 
 def main():
     os.makedirs("data", exist_ok=True)
-    print("[DATA] Downloading BTC/USDT 15m candles from CryptoCompare...")
-    df = fetch_cryptocompare_minutes(limit=2000, aggregate=15)
-    out_path = "data/btcusdt_15m.csv"
-    df.to_csv(out_path, index=False)
-    print(f"[DATA] Saved {len(df)} rows to {out_path}")
+
+    timeframes = [
+        (1,   "1m"),
+        (5,   "5m"),
+        (15,  "15m"),
+        # 1h via histohour would be a different endpoint; skip for now
+    ]
+
+    for agg, name in timeframes:
+        print(f"[DATA] Downloading BTC/USDT {name} (aggregate={agg}) from CryptoCompare...")
+        df = fetch_cc(FSYM, TSYM, aggregate=agg, limit=2000)
+        out_path = f"data/btcusdt_{name}.csv"
+        df.to_csv(out_path, index=False)
+        print(f"[DATA] Saved {len(df)} rows to {out_path}")
 
 if __name__ == "__main__":
     main()

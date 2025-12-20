@@ -18,9 +18,14 @@ TIMEFRAMES = {
     "15m": ("data/btcusdt_15m.csv", "15m"),
 }
 
-TP_PCT = 0.01   # +1% take profit
-SL_PCT = 0.005  # -0.5% stop loss
-LOOKAHEAD = 48  # next 48 bars
+# TP/SL + lookahead per timeframe
+LABEL_CONFIG = {
+    # 1m: softer TP/SL and shorter lookahead
+    "1m": {"tp_pct": 0.005, "sl_pct": 0.0075, "lookahead": 24},
+    # 5m/15m: original-style config
+    "5m": {"tp_pct": 0.01, "sl_pct": 0.005, "lookahead": 36},
+    "15m": {"tp_pct": 0.01, "sl_pct": 0.005, "lookahead": 48},
+}
 
 N_SPLITS = 3
 N_ESTIMATORS = 300
@@ -103,10 +108,12 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def create_tp_sl_labels(df: pd.DataFrame,
-                        tp_pct: float,
-                        sl_pct: float,
-                        lookahead: int) -> pd.Series:
+def create_tp_sl_labels(
+    df: pd.DataFrame,
+    tp_pct: float,
+    sl_pct: float,
+    lookahead: int,
+) -> pd.Series:
     close = df["close"].values
     n = len(df)
     labels = np.zeros(n, dtype=int)
@@ -138,9 +145,9 @@ def create_tp_sl_labels(df: pd.DataFrame,
 
 
 def train_for_timeframe(tf_name: str, csv_path: str, interval_str: str):
-    print(f"\n==============================")
+    print("\n==============================")
     print(f"[TRAIN] Timeframe: {tf_name} | CSV: {csv_path}")
-    print(f"==============================")
+    print("==============================")
 
     if not os.path.exists(csv_path):
         print(f"[TRAIN] CSV not found for {tf_name}: {csv_path} (skipping)")
@@ -156,7 +163,22 @@ def train_for_timeframe(tf_name: str, csv_path: str, interval_str: str):
         print(f"[TRAIN] No usable rows for {tf_name} – need real candle data in {csv_path}")
         return
 
-    labels = create_tp_sl_labels(df_raw.loc[df_feat.index], TP_PCT, SL_PCT, LOOKAHEAD)
+    # --- per-timeframe TP/SL/LOOKAHEAD here ---
+    cfg = LABEL_CONFIG.get(tf_name, LABEL_CONFIG["15m"])
+    tp_pct = cfg["tp_pct"]
+    sl_pct = cfg["sl_pct"]
+    lookahead = cfg["lookahead"]
+
+    print(f"[TRAIN] {tf_name} TP={tp_pct} SL={sl_pct} LOOKAHEAD={lookahead}")
+
+    labels = create_tp_sl_labels(
+        df_raw.loc[df_feat.index],
+        tp_pct,
+        sl_pct,
+        lookahead,
+    )
+    # -----------------------------------------
+
     df_feat["label"] = labels
 
     feature_cols = [c for c in df_feat.columns if c not in ("time", "label")]

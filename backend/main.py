@@ -9,7 +9,7 @@ import os
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.4.0",
+    version="0.4.1",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -393,17 +393,34 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def map_proba_to_signal(p_good: float, risk: str) -> str:
+def map_proba_to_signal(p_good: float, risk: str, timeframe: str) -> str:
+    """
+    p_good = probability this is a good long (TP before SL).
+    thresholds are relaxed for 1m so it doesn't spam HOLD.
+    """
     risk = risk.lower()
-    if risk == "risky":
-        buy_th = 0.55
-        hold_th = 0.50
-    elif risk == "strict":
-        buy_th = 0.75
-        hold_th = 0.60
-    else:  # medium
-        buy_th = 0.65
-        hold_th = 0.55
+    timeframe = timeframe.lower()
+
+    if timeframe == "1m":
+        if risk == "risky":
+            buy_th = 0.52
+            hold_th = 0.50
+        elif risk == "strict":
+            buy_th = 0.70
+            hold_th = 0.55
+        else:  # medium
+            buy_th = 0.60
+            hold_th = 0.52
+    else:
+        if risk == "risky":
+            buy_th = 0.55
+            hold_th = 0.50
+        elif risk == "strict":
+            buy_th = 0.75
+            hold_th = 0.60
+        else:  # medium
+            buy_th = 0.65
+            hold_th = 0.55
 
     if p_good >= buy_th:
         return "BUY"
@@ -500,7 +517,7 @@ def predict(
     class_to_proba = {cls: p for cls, p in zip(classes, proba)}
     p_good = float(class_to_proba.get(1, 0.0))
 
-    final_signal = map_proba_to_signal(p_good, risk)
+    final_signal = map_proba_to_signal(p_good, risk, timeframe)
 
     return {
         "ok": True,
