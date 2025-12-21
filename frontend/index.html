@@ -12,6 +12,8 @@
       inset: 0;
       display: flex;
       align-items: center;
+.hidden { display: none !important; }
+
       justify-content: center;
       pointer-events: none;
       z-index: 0;
@@ -22,8 +24,20 @@
       text-transform: uppercase;
       user-select: none;
     }
+<!-- LOGIN GATE -->
+<div id="loginGate" class="min-h-screen flex items-center justify-center bg-slate-900/90">
+  <div class="bg-slate-900/80 border border-slate-700 rounded-2xl p-8 max-w-sm w-full mx-4">
+    <h1 class="text-3xl font-bold text-emerald-400 text-center mb-8">Login</h1>
+    <input id="username" type="text" placeholder="Any username" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 mb-4 text-center">
+    <input id="password" type="password" placeholder="Password" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 mb-4 text-center">
+    <button id="loginBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-lg font-bold text-lg">Login</button>
+    <p class="text-xs text-slate-400 text-center mt-4">Password: Trader</p>
+  </div>
+</div>
+
     .content-layer {
-      position: relative;
+      <div id="mainContent" class="content-layer hidden">
+
       z-index: 10;
     }
   </style>
@@ -464,6 +478,25 @@
 
     refreshSignals();
     startAuto();
+// LOGIN SYSTEM
+const PASSWORD = "Trader";
+const loginGate = document.getElementById("loginGate");
+const mainContent = document.getElementById("mainContent");
+const loginBtn = document.getElementById("loginBtn");
+const usernameInput = document.getElementById("username");
+const passwordInput = document.getElementById("password");
+
+loginBtn.addEventListener("click", () => {
+  if (passwordInput.value === PASSWORD) {
+    loginGate.style.display = "none";
+    mainContent.classList.remove("hidden");
+  } else {
+    passwordInput.value = "";
+    passwordInput.style.borderColor = "#ef4444";
+    setTimeout(() => passwordInput.style.borderColor = "", 1000);
+  }
+});
+
   </script>
 </body>
 </html>
