@@ -12,8 +12,6 @@
       inset: 0;
       display: flex;
       align-items: center;
-.hidden { display: none !important; }
-
       justify-content: center;
       pointer-events: none;
       z-index: 0;
@@ -24,39 +22,58 @@
       text-transform: uppercase;
       user-select: none;
     }
-<!-- LOGIN GATE -->
-<div id="loginGate" class="min-h-screen flex items-center justify-center bg-slate-900/90">
-  <div class="bg-slate-900/80 border border-slate-700 rounded-2xl p-8 max-w-sm w-full mx-4">
-    <h1 class="text-3xl font-bold text-emerald-400 text-center mb-8">Login</h1>
-    <input id="username" type="text" placeholder="Any username" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 mb-4 text-center">
-    <input id="password" type="password" placeholder="Password" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 mb-4 text-center">
-    <button id="loginBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-lg font-bold text-lg">Login</button>
-    <p class="text-xs text-slate-400 text-center mt-4">Password: Trader</p>
-  </div>
-</div>
-
-    .content-layer {
-      <div id="mainContent" class="content-layer hidden">
-
-      z-index: 10;
-    }
+    .hidden { display: none !important; }
+    .content-layer { z-index: 10; }
   </style>
 </head>
 <body class="min-h-screen text-slate-100">
-  <div class="watermark">AI_Aadam</div>
 
-  <div class="content-layer">
+  <!-- LICENSE KEY SYSTEM -->
+  <div id="keyGate" class="min-h-screen flex items-center justify-center bg-slate-900/90">
+    <div class="bg-slate-900/80 border border-slate-700 rounded-2xl p-8 max-w-sm w-full mx-4">
+      <h1 class="text-3xl font-bold text-emerald-400 text-center mb-8">AI Crypto Dashboard</h1>
+      <p class="text-slate-400 text-center mb-6 text-sm">Enter your license key to access</p>
+      
+      <input 
+        id="licenseKey" 
+        type="text" 
+        placeholder="AADXM" 
+        maxlength="32"
+        class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-3 mb-4 text-center font-mono uppercase tracking-wider text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+      >
+      
+      <button 
+        id="validateKeyBtn" 
+        class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-lg font-bold text-lg transition-all duration-200"
+      >
+        Validate Key
+      </button>
+      
+      <p id="keyStatus" class="text-xs text-slate-400 text-center mt-4 font-mono">
+        Key validated securely via backend API
+      </p>
+    </div>
+  </div>
+
+  <!-- MAIN DASHBOARD CONTENT -->
+  <div id="mainContent" class="content-layer hidden min-h-screen">
+    <div class="watermark">AI_Aadam</div>
+
     <div class="max-w-6xl mx-auto py-4 px-4 space-y-4">
-      <!-- Header -->
+      <!-- Header with Key Status -->
       <header class="flex items-center justify-between">
         <div>
           <h1 class="text-2xl font-bold tracking-tight">AI Crypto Dashboard</h1>
           <p class="text-slate-400 text-sm">
-            TradingView chart + AI signals (rules + ML) from your Python backend
+            TradingView chart + AI signals (rules + ML) from Python backend
+          </p>
+          <p class="text-xs text-emerald-400 mt-1">
+            ✓ Licensed: <span id="activeKey" class="font-mono">Loading...</span>
           </p>
         </div>
-        <div class="text-xs text-slate-500">
-          Backend: local
+        <div class="flex items-center gap-4">
+          <button id="logoutBtn" class="text-xs text-rose-400 hover:text-rose-300 underline px-2 py-1 rounded transition">Logout</button>
+          <div class="text-xs text-slate-500">Backend: live</div>
         </div>
       </header>
 
@@ -96,7 +113,7 @@
         </button>
 
         <p class="text-xs text-slate-500 ml-auto">
-          TradingView chart symbol must match your backend symbol (e.g. BINANCE:BTCUSDT).
+          TradingView chart symbol must match backend (e.g. BINANCE:BTCUSDT)
         </p>
       </section>
 
@@ -131,7 +148,6 @@
                   "container_id": "tradingview_chart"
                 });
               }
-              document.addEventListener("DOMContentLoaded", initTradingView);
             </script>
           </div>
         </div>
@@ -141,7 +157,7 @@
           <div>
             <h2 class="text-sm font-semibold mb-1">AI Signal</h2>
             <p class="text-xs text-slate-400 mb-2">
-              Rule-based signals (RSI + EMA + MACD + Bollinger + Fibonacci) and ML prediction on crypto OHLC data.
+              Rule-based (RSI+EMA+MACD+Bollinger+Fibonacci) + ML prediction
             </p>
 
             <!-- Rule-based signal badge -->
@@ -159,8 +175,8 @@
 
             <div class="mt-3 text-xs text-slate-400 space-y-1">
               <div>Symbol: <span id="aiSymbol" class="font-mono text-slate-100">–</span></div>
-              <div>Interval (rules): <span id="aiInterval" class="font-mono text-slate-100">–</span></div>
-              <div>Last updated: <span id="aiUpdated" class="font-mono text-slate-100">–</span></div>
+              <div>Interval: <span id="aiInterval" class="font-mono text-slate-100">–</span></div>
+              <div>Updated: <span id="aiUpdated" class="font-mono text-slate-100">–</span></div>
             </div>
           </div>
 
@@ -183,106 +199,73 @@
         <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-3">
           <div>
             <h2 class="text-sm font-semibold mb-1">Risk & Position Size</h2>
-            <p class="text-xs text-slate-400">
-              Calculate position size based on account size, risk %, entry, and stop.
-            </p>
+            <p class="text-xs text-slate-400">Position size calculator for risk management</p>
           </div>
 
           <div class="grid grid-cols-2 gap-3 text-xs">
             <div>
-              <label class="block text-[11px] uppercase text-slate-400 mb-1">Account size ($)</label>
-              <input
-                id="riskAccount"
-                type="number"
-                value="1000"
-                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Account ($)</label>
+              <input id="riskAccount" type="number" value="1000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div>
-              <label class="block text-[11px] uppercase text-slate-400 mb-1">Risk per trade (%)</label>
-              <input
-                id="riskPercent"
-                type="number"
-                value="1"
-                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Risk (%)</label>
+              <input id="riskPercent" type="number" value="1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div>
-              <label class="block text-[11px] uppercase text-slate-400 mb-1">Entry price</label>
-              <input
-                id="riskEntry"
-                type="number"
-                step="0.0001"
-                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Entry</label>
+              <input id="riskEntry" type="number" step="0.0001" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div>
-              <label class="block text-[11px] uppercase text-slate-400 mb-1">Stop loss price</label>
-              <input
-                id="riskStop"
-                type="number"
-                step="0.0001"
-                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Stop loss</label>
+              <input id="riskStop" type="number" step="0.0001" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
           </div>
 
-          <button
-            id="riskCalcBtn"
-            class="mt-1 bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition self-start"
-          >
-            Calculate position
+          <button id="riskCalcBtn" class="mt-1 bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition self-start">
+            Calculate
           </button>
 
           <div class="mt-1 text-xs text-slate-300 space-y-1">
             <div>Max risk: <span id="riskDollar" class="font-mono text-emerald-300">–</span></div>
-            <div>Position size (coins): <span id="riskSize" class="font-mono text-emerald-300">–</span></div>
-            <div>Notional size ($): <span id="riskNotional" class="font-mono text-slate-200">–</span></div>
+            <div>Position: <span id="riskSize" class="font-mono text-emerald-300">–</span></div>
+            <div>Notional: <span id="riskNotional" class="font-mono text-slate-200">–</span></div>
           </div>
 
           <p class="mt-1 text-[10px] text-slate-500">
-            Size = (Account × Risk%) ÷ |Entry − Stop|. Assumes 1x spot (no leverage).
+            Size = (Account × Risk%) ÷ |Entry − Stop| (spot trading)
           </p>
         </div>
       </section>
     </div>
   </div>
 
-  <!-- Bottom-right credits box -->
+  <!-- Credits -->
   <div class="fixed bottom-4 right-4 z-20 text-[10px] text-slate-400 space-y-1 text-right">
-    <div class="text-xs font-semibold text-slate-300">
-      Created by <span class="text-emerald-400">aadam</span>
-    </div>
-    <div>
-      TikTok:
-      <a href="https://www.tiktok.com/@ai_aadam"
-         target="_blank"
-         rel="noopener noreferrer"
-         class="underline hover:text-emerald-400">
-        @ai_aadam
-      </a>
-    </div>
-    <div>
-      Donate:
-      <a href="https://www.paypal.com/paypalme/Aadam800"
-         target="_blank"
-         rel="noopener noreferrer"
-         class="underline hover:text-emerald-400">
-        paypal.me/Aadam800
-      </a>
-    </div>
-    <div>
-      Contact me: <span class="text-slate-200">07506254663</span>
-    </div>
+    <div class="text-xs font-semibold text-slate-300">Created by <span class="text-emerald-400">aadam</span></div>
+    <div>TikTok: <a href="https://www.tiktok.com/@ai_aadam" target="_blank" rel="noopener noreferrer" class="underline hover:text-emerald-400">@ai_aadam</a></div>
+    <div>Donate: <a href="https://www.paypal.com/paypalme/Aadam800" target="_blank" rel="noopener noreferrer" class="underline hover:text-emerald-400">paypal.me/Aadam800</a></div>
+    <div>Contact: <span class="text-slate-200">07506254663</span></div>
   </div>
 
   <script>
     const apiBase = "https://aadamautotrades.onrender.com";
 
+    // KEY SYSTEM VARIABLES
+    const keyGate = document.getElementById("keyGate");
+    const mainContent = document.getElementById("mainContent");
+    const licenseKeyInput = document.getElementById("licenseKey");
+    const validateKeyBtn = document.getElementById("validateKeyBtn");
+    const keyStatus = document.getElementById("keyStatus");
+    const activeKeyDisplay = document.getElementById("activeKey");
+    const logoutBtn = document.getElementById("logoutBtn");
+
+    let currentKey = localStorage.getItem("ai_dashboard_key") || null;
+    let isKeyValid = false;
+
+    // DASHBOARD ELEMENTS
     const symbolInput = document.getElementById("symbolInput");
     const intervalSelect = document.getElementById("intervalSelect");
     const updateBtn = document.getElementById("updateBtn");
-
     const signalBadge = document.getElementById("signalBadge");
     const signalDot = document.getElementById("signalDot");
     const signalText = document.getElementById("signalText");
@@ -291,11 +274,9 @@
     const aiUpdated = document.getElementById("aiUpdated");
     const signalHistory = document.getElementById("signalHistory");
     const autoToggle = document.getElementById("autoToggle");
-
     const mlBadge = document.getElementById("mlBadge");
     const mlDot = document.getElementById("mlDot");
     const mlText = document.getElementById("mlText");
-
     const riskAccount = document.getElementById("riskAccount");
     const riskPercent = document.getElementById("riskPercent");
     const riskEntry = document.getElementById("riskEntry");
@@ -308,12 +289,82 @@
     let autoOn = true;
     let autoTimer = null;
 
+    // KEY SYSTEM FUNCTIONS
     function formatTimestamp(tsSeconds) {
       if (!tsSeconds) return "–";
       const d = new Date(tsSeconds * 1000);
       return d.toLocaleString("en-GB");
     }
 
+    async function validateKeySilent(key) {
+      try {
+        const res = await fetch(`${apiBase}/validate-key/${encodeURIComponent(key)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.valid) {
+            isKeyValid = true;
+            activeKeyDisplay.textContent = key.slice(0,12) + `...✓`;
+            showMainContent();
+            return true;
+          }
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    async function validateKey() {
+      const key = licenseKeyInput.value.trim().toUpperCase();
+      if (!key) return;
+
+      validateKeyBtn.disabled = true;
+      validateKeyBtn.textContent = "Validating...";
+      keyStatus.textContent = "Contacting backend...";
+      keyStatus.className = "text-xs text-slate-200 text-center mt-4 font-mono";
+
+      try {
+        const res = await fetch(`${apiBase}/validate-key/${encodeURIComponent(key)}`);
+        const data = await res.json();
+
+        if (res.ok && data.valid) {
+          currentKey = key;
+          localStorage.setItem("ai_dashboard_key", key);
+          activeKeyDisplay.textContent = key.slice(0,12) + `...✓ ${data.expires || 'perm'}`;
+          keyStatus.textContent = `✅ Valid ${data.expires ? `until ${data.expires}` : 'permanently'}`;
+          keyStatus.className = "text-xs text-emerald-400 text-center mt-4 font-mono";
+          setTimeout(showMainContent, 1000);
+        } else {
+          throw new Error(data.message || "Invalid/expired key");
+        }
+      } catch (err) {
+        keyStatus.textContent = `❌ ${err.message}`;
+        keyStatus.className = "text-xs text-rose-400 text-center mt-4 font-mono";
+        licenseKeyInput.value = "";
+        licenseKeyInput.focus();
+      } finally {
+        validateKeyBtn.disabled = false;
+        validateKeyBtn.textContent = "Validate Key";
+      }
+    }
+
+    function showMainContent() {
+      keyGate.classList.add("hidden");
+      mainContent.classList.remove("hidden");
+      document.addEventListener("DOMContentLoaded", initTradingView);
+      initDashboard();
+    }
+
+    function logout() {
+      localStorage.removeItem("ai_dashboard_key");
+      currentKey = null;
+      isKeyValid = false;
+      mainContent.classList.add("hidden");
+      keyGate.classList.remove("hidden");
+      licenseKeyInput.focus();
+      keyStatus.textContent = "Key validated securely via backend API";
+      keyStatus.className = "text-xs text-slate-400 text-center mt-4 font-mono";
+    }
+
+    // DASHBOARD FUNCTIONS
     function updateSignalUI(data) {
       const signals = data.signal;
       if (!signals || !signals.length) {
@@ -331,8 +382,8 @@
       const lastTime = data.time[data.time.length - 1];
 
       signalText.textContent = lastSignal;
-
       signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full border";
+
       if (lastSignal === "BUY") {
         signalBadge.classList.add("bg-emerald-500/10", "border-emerald-500/60", "text-emerald-300");
         signalDot.className = "h-2 w-2 rounded-full bg-emerald-400";
@@ -353,26 +404,16 @@
       for (let i = 0; i < len; i++) {
         const s = signals[signals.length - 1 - i];
         const t = data.time[data.time.length - 1 - i];
-        const color =
-          s === "BUY"
-            ? "text-emerald-300"
-            : s === "SELL"
-            ? "text-rose-300"
-            : "text-slate-300";
-        items.push(
-          `<div class="flex justify-between gap-2">
-             <span class="${color}">${s}</span>
-             <span class="text-slate-500">${formatTimestamp(t)}</span>
-           </div>`
-        );
+        const color = s === "BUY" ? "text-emerald-300" : s === "SELL" ? "text-rose-300" : "text-slate-300";
+        items.push(`<div class="flex justify-between gap-2"><span class="${color}">${s}</span><span class="text-slate-500">${formatTimestamp(t)}</span></div>`);
       }
       signalHistory.innerHTML = items.join("");
     }
 
     function updateMlUI(prediction) {
       const p = prediction || "HOLD";
-
       mlBadge.className = "mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full border";
+
       if (p === "BUY") {
         mlBadge.classList.add("bg-emerald-500/10", "border-emerald-500/60", "text-emerald-300");
         mlDot.className = "h-2 w-2 rounded-full bg-emerald-400";
@@ -383,7 +424,6 @@
         mlBadge.classList.add("bg-slate-700/40", "border-slate-500/60", "text-slate-100");
         mlDot.className = "h-2 w-2 rounded-full bg-slate-400";
       }
-
       mlText.textContent = p;
     }
 
@@ -405,6 +445,8 @@
     }
 
     async function refreshSignals() {
+      if (!isKeyValid) return;
+      
       try {
         updateBtn.disabled = true;
         updateBtn.textContent = "Loading...";
@@ -419,8 +461,7 @@
       } catch (err) {
         console.error(err);
         signalText.textContent = "Error";
-        signalBadge.className =
-          "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/60 text-rose-300";
+        signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/60 text-rose-300";
         signalDot.className = "h-2 w-2 rounded-full bg-rose-400";
         updateMlUI("HOLD");
       } finally {
@@ -432,26 +473,9 @@
     function startAuto() {
       if (autoTimer) clearInterval(autoTimer);
       autoTimer = setInterval(() => {
-        if (autoOn) refreshSignals();
+        if (autoOn && isKeyValid) refreshSignals();
       }, 30000);
     }
-
-    autoToggle.addEventListener("click", () => {
-      autoOn = !autoOn;
-      if (autoOn) {
-        autoToggle.textContent = "Auto-refresh: ON (30s)";
-        autoToggle.classList.remove("bg-slate-800");
-        startAuto();
-      } else {
-        autoToggle.textContent = "Auto-refresh: OFF";
-        autoToggle.classList.add("bg-slate-800");
-      }
-    });
-
-    updateBtn.addEventListener("click", refreshSignals);
-    symbolInput.addEventListener("keyup", (e) => {
-      if (e.key === "Enter") refreshSignals();
-    });
 
     function calcRisk() {
       const account = parseFloat(riskAccount.value);
@@ -460,7 +484,7 @@
       const stop = parseFloat(riskStop.value);
 
       if (!account || !pct || !entry || !stop || entry === stop) {
-        alert("Fill account, risk %, entry and stop (entry ≠ stop).");
+        alert("Fill all fields (entry ≠ stop)");
         return;
       }
 
@@ -474,29 +498,44 @@
       riskNotional.textContent = `$${notional.toFixed(2)}`;
     }
 
-    riskCalcBtn.addEventListener("click", calcRisk);
+    function initDashboard() {
+      updateBtn.addEventListener("click", refreshSignals);
+      symbolInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") refreshSignals();
+      });
+      autoToggle.addEventListener("click", () => {
+        autoOn = !autoOn;
+        if (autoOn) {
+          autoToggle.textContent = "Auto-refresh: ON (30s)";
+          autoToggle.classList.remove("bg-slate-800");
+          startAuto();
+        } else {
+          autoToggle.textContent = "Auto-refresh: OFF";
+          autoToggle.classList.add("bg-slate-800");
+        }
+      });
+      riskCalcBtn.addEventListener("click", calcRisk);
+      
+      refreshSignals();
+      startAuto();
+    }
 
-    refreshSignals();
-    startAuto();
-// LOGIN SYSTEM
-const PASSWORD = "Trader";
-const loginGate = document.getElementById("loginGate");
-const mainContent = document.getElementById("mainContent");
-const loginBtn = document.getElementById("loginBtn");
-const usernameInput = document.getElementById("username");
-const passwordInput = document.getElementById("password");
+    // EVENT LISTENERS
+    validateKeyBtn.addEventListener("click", validateKey);
+    licenseKeyInput.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") validateKey();
+    });
+    logoutBtn.addEventListener("click", logout);
 
-loginBtn.addEventListener("click", () => {
-  if (passwordInput.value === PASSWORD) {
-    loginGate.style.display = "none";
-    mainContent.classList.remove("hidden");
-  } else {
-    passwordInput.value = "";
-    passwordInput.style.borderColor = "#ef4444";
-    setTimeout(() => passwordInput.style.borderColor = "", 1000);
-  }
-});
+    // INIT
+    if (currentKey) {
+      validateKeySilent(currentKey);
+    } else {
+      licenseKeyInput.focus();
+    }
 
+    // TradingView init on DOM load
+    document.addEventListener("DOMContentLoaded", initTradingView);
   </script>
 </body>
 </html>
