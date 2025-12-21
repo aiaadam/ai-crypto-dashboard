@@ -20,8 +20,8 @@ TIMEFRAMES = {
 
 # TP/SL + lookahead per timeframe
 LABEL_CONFIG = {
-    # 1m: softer TP/SL and shorter lookahead
-    "1m": {"tp_pct": 0.005, "sl_pct": 0.0075, "lookahead": 24},
+    # 1m: much softer and shorter so "good longs" are more common
+    "1m": {"tp_pct": 0.003, "sl_pct": 0.008, "lookahead": 12},
     # 5m/15m: original-style config
     "5m": {"tp_pct": 0.01, "sl_pct": 0.005, "lookahead": 36},
     "15m": {"tp_pct": 0.01, "sl_pct": 0.005, "lookahead": 48},
@@ -209,9 +209,13 @@ def train_for_timeframe(tf_name: str, csv_path: str, interval_str: str):
         print(f"[TRAIN] Not enough data for CV on {tf_name}; training on all data.")
 
     print(f"[TRAIN] Fitting final model on all data for {tf_name}...")
+
+    # For 1m use shallower trees to make it more decisive on noisy data
+    max_depth = 8 if tf_name == "1m" else None
+
     final_model = RandomForestClassifier(
         n_estimators=N_ESTIMATORS,
-        max_depth=None,
+        max_depth=max_depth,
         n_jobs=-1,
         random_state=RANDOM_STATE,
         class_weight="balanced_subsample",
