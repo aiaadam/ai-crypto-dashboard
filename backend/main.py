@@ -9,7 +9,7 @@ import os
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.5.0",
+    version="0.5.1",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -396,21 +396,21 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
 def map_proba_to_signal(p_good: float, risk: str, timeframe: str) -> str:
     """
     p_good = probability this is a good long (TP before SL).
-    thresholds are relaxed for 1m so it doesn't spam HOLD.
     """
     risk = risk.lower()
     timeframe = timeframe.lower()
 
     if timeframe == "1m":
+        # 1m: slightly looser thresholds to reduce HOLD spam
         if risk == "risky":
-            buy_th = 0.52
-            hold_th = 0.50
+            buy_th = 0.54
+            hold_th = 0.48
         elif risk == "strict":
-            buy_th = 0.70
+            buy_th = 0.65
             hold_th = 0.55
         else:  # medium
             buy_th = 0.60
-            hold_th = 0.52
+            hold_th = 0.50
     else:
         if risk == "risky":
             buy_th = 0.55
@@ -642,6 +642,32 @@ def predict(
 
     final_signal = map_proba_to_signal(p_good, risk, timeframe)
     final_signal = smc_overlay(df, final_signal, p_good)
+
+    # ----- extra 1m behaviour: avoid buying dumps, sell earlier on drops -----
+    if timeframe == "1m":
+        last = df.tail(3)
+        price_trend = last["close"].iloc[-1] - last["close"].iloc[0]
+        ema20 = last["ema_20"].iloc[-1] if "ema_20" in last.columns else None
+        ema50 = last["ema_50"].iloc[-1] if "ema_50" in last.columns else None
+
+        if ema20 is not None and ema50 is not None:
+            # strong short-term downtrend
+            strong_down = price_trend < 0 and ema20 < ema50
+            # strong short-term uptrend
+            strong_up = price_trend > 0 and ema20 > ema50
+
+            # 1) Don't BUY into a clear dump -> downgrade to HOLD
+            if final_signal == "BUY" and strong_down:
+                final_signal = "HOLD"
+
+            # 2) If AI is only HOLD but price is clearly starting to dump, flip to SELL sooner
+            if final_signal == "HOLD" and strong_down and p_good < 0.45:
+                final_signal = "SELL"
+
+            # 3) Optional: if HOLD and strong uptrend with decent prob, upgrade to BUY
+            if final_signal == "HOLD" and strong_up and p_good > 0.55:
+                final_signal = "BUY"
+    # -------------------------------------------------------------------------
 
     return {
         "ok": True,
