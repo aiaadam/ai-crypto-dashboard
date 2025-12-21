@@ -9,7 +9,7 @@ import os
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.4.1",
+    version="0.5.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -429,6 +429,129 @@ def map_proba_to_signal(p_good: float, risk: str, timeframe: str) -> str:
     return "SELL"
 
 
+# -------------------------------
+# Simple SMC helpers (BoS/CHoCH + FVG)
+# -------------------------------
+
+def detect_bos_choch(df: pd.DataFrame):
+    """
+    Very rough structure detection using recent swing highs/lows.
+    Returns simple bool flags; this is intentionally conservative.
+    """
+    if len(df) < 10:
+        return {
+            "bos_bull": False,
+            "bos_bear": False,
+            "choch_bull": False,
+            "choch_bear": False,
+        }
+
+    d = df.tail(50).reset_index(drop=True)
+
+    # mark swing highs/lows (3-bar pattern)
+    swing_high = (d["high"] > d["high"].shift(1)) & (d["high"] > d["high"].shift(-1))
+    swing_low = (d["low"] < d["low"].shift(1)) & (d["low"] < d["low"].shift(-1))
+
+    d["swing_high"] = swing_high
+    d["swing_low"] = swing_low
+
+    # collect recent swings
+    highs = d[d["swing_high"]]
+    lows = d[d["swing_low"]]
+
+    bos_bull = bos_bear = choch_bull = choch_bear = False
+
+    if len(highs) >= 2:
+        last_high = highs.iloc[-1]["high"]
+        prev_high = highs.iloc[-2]["high"]
+        if last_high > prev_high:
+            bos_bull = True
+
+    if len(lows) >= 2:
+        last_low = lows.iloc[-1]["low"]
+        prev_low = lows.iloc[-2]["low"]
+        if last_low < prev_low:
+            bos_bear = True
+
+    # simple CHoCH: after bullish BoS, break a low; after bearish BoS, break a high
+    if bos_bull and len(lows) >= 2:
+        last_low = lows.iloc[-1]["low"]
+        prev_low = lows.iloc[-2]["low"]
+        if last_low < prev_low:
+            choch_bear = True
+
+    if bos_bear and len(highs) >= 2:
+        last_high = highs.iloc[-1]["high"]
+        prev_high = highs.iloc[-2]["high"]
+        if last_high > prev_high:
+            choch_bull = True
+
+    return {
+        "bos_bull": bool(bos_bull),
+        "bos_bear": bool(bos_bear),
+        "choch_bull": bool(choch_bull),
+        "choch_bear": bool(choch_bear),
+    }
+
+
+def detect_fvg(df: pd.DataFrame):
+    """
+    Simple 3-candle Fair Value Gap:
+    - bearish FVG: high[0] < low[2]
+    - bullish FVG: low[0] > high[2]
+    Uses the last 3 candles only.
+    """
+    if len(df) < 3:
+        return {"fvg_bull": False, "fvg_bear": False}
+
+    d = df.tail(3)
+    h0, h2 = d["high"].iloc[0], d["high"].iloc[2]
+    l0, l2 = d["low"].iloc[0], d["low"].iloc[2]
+
+    fvg_bear = h0 < l2
+    fvg_bull = l0 > h2
+
+    return {"fvg_bull": bool(fvg_bull), "fvg_bear": bool(fvg_bear)}
+
+
+def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
+    """
+    Overlay SMC-style info on top of AI decision:
+    - uses BoS/CHoCH + FVG
+    - only nudges signals when indicators + p_good agree
+    - avoids forcing buys in extreme RSI conditions.
+    """
+    latest = df.iloc[-1]
+
+    rsi = latest["rsi"]
+    ema_20 = latest.get("ema_20", latest.get("ema_50", 0.0))
+    ema_50 = latest.get("ema_50", ema_20)
+
+    swing_info = detect_bos_choch(df)
+    fvg_info = detect_fvg(df)
+
+    bullish_setup = swing_info["choch_bull"] and fvg_info["fvg_bull"]
+    bearish_setup = swing_info["choch_bear"] and fvg_info["fvg_bear"]
+
+    # Bullish SMC setup: only if not overbought and AI not strongly bearish
+    if bullish_setup:
+        if rsi < 70 and ema_20 > ema_50 and p_good > 0.50:
+            if final_signal == "SELL":
+                final_signal = "HOLD"
+            elif final_signal == "HOLD":
+                final_signal = "BUY"
+
+    # Bearish SMC setup: only if not extremely oversold and AI probability is low
+    if bearish_setup:
+        if rsi > 30 and ema_20 < ema_50 and p_good < 0.50:
+            if final_signal == "BUY":
+                final_signal = "HOLD"
+            elif final_signal == "HOLD":
+                final_signal = "SELL"
+
+    return final_signal
+
+
 @app.get("/predict/{symbol}")
 def predict(
     symbol: str,
@@ -518,6 +641,7 @@ def predict(
     p_good = float(class_to_proba.get(1, 0.0))
 
     final_signal = map_proba_to_signal(p_good, risk, timeframe)
+    final_signal = smc_overlay(df, final_signal, p_good)
 
     return {
         "ok": True,
