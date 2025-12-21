@@ -2,157 +2,342 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>AI Crypto Dashboard</title>
+  <title>AI Crypto Dashboard | Secure Terminal</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://cdn.tailwindcss.com"></script>
-
   <style>
-    body { background: #020617; }
+    body { background: #020617; overflow-x: hidden; }
+    
+    /* Login Overlay */
+    #loginOverlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(2, 6, 23, 0.98);
+      backdrop-filter: blur(15px);
+      display: flex; align-items: center; justify-content: center;
+    }
 
     .watermark {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-      z-index: 0;
-      font-size: clamp(4rem, 12vw, 10rem);
-      font-weight: 800;
-      letter-spacing: 0.2em;
-      color: rgba(148, 163, 184, 0.05);
-      text-transform: uppercase;
-      user-select: none;
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      pointer-events: none; z-index: 0; font-size: clamp(4rem, 12vw, 10rem);
+      font-weight: 800; letter-spacing: 0.2em; color: rgba(148, 163, 184, 0.05);
+      text-transform: uppercase; user-select: none;
     }
 
     .content-layer {
       position: relative;
       z-index: 10;
+      display: none; /* Initially hidden */
     }
 
-    /* LOGIN OVERLAY */
-    #loginScreen {
-      position: fixed;
-      inset: 0;
-      background: #020617;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 50;
-    }
+    /* Custom Scrollbar for Signal History */
+    #signalHistory::-webkit-scrollbar { width: 4px; }
+    #signalHistory::-webkit-scrollbar-track { background: transparent; }
+    #signalHistory::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
   </style>
 </head>
-
 <body class="min-h-screen text-slate-100">
 
-<!-- LOGIN SCREEN -->
-<div id="loginScreen">
-  <div class="bg-slate-900/70 border border-slate-700 rounded-2xl p-6 w-96 text-center">
-    <h1 class="text-xl font-bold text-slate-100 mb-1">Access Dashboard</h1>
-    <p class="text-slate-400 text-xs mb-4">Enter Username, Password & Key</p>
-
-    <div class="space-y-3 text-left">
-      <div>
-        <label class="text-xs text-slate-400 uppercase">Username</label>
-        <input id="userInput" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Any username allowed">
+  <div id="loginOverlay">
+    <div class="bg-slate-900 border border-slate-700/50 p-8 rounded-2xl shadow-2xl w-full max-w-md mx-4">
+      <div class="text-center mb-8">
+        <div class="inline-block p-3 bg-emerald-500/10 rounded-full mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </div>
+        <h2 class="text-2xl font-bold">Terminal Access</h2>
+        <p class="text-slate-400 text-sm mt-1">Authorized Personnel Only</p>
       </div>
-
-      <div>
-        <label class="text-xs text-slate-400 uppercase">Password</label>
-        <input id="passInput" type="password" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Password is Aadxm">
-      </div>
-
-      <div>
-        <label class="text-xs text-slate-400 uppercase">Key System</label>
-        <input id="keyInput" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Enter your key">
+      
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs uppercase text-slate-500 mb-1 ml-1">Username</label>
+          <input id="userInput" type="text" placeholder="Enter any name" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition" />
+        </div>
+        <div>
+          <label class="block text-xs uppercase text-slate-500 mb-1 ml-1">Password</label>
+          <input id="passInput" type="password" placeholder="••••••••" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-emerald-500 outline-none transition" />
+        </div>
+        <button id="loginBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-lg font-bold transition duration-200 mt-2">
+          Initialize Dashboard
+        </button>
+        <p id="errorMsg" class="text-rose-500 text-xs text-center hidden">Access Denied: Invalid credentials.</p>
       </div>
     </div>
-
-    <button id="loginBtn"
-      class="mt-4 bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold px-4 py-2 rounded-lg transition w-full">
-      Enter Dashboard
-    </button>
-
-    <p id="loginMsg" class="text-xs text-rose-400 mt-2 hidden">Incorrect login details</p>
-  </div>
-</div>
-
-
-
-<!-- ============================ -->
-<!-- YOUR REAL DASHBOARD BELOW   -->
-<!-- ============================ -->
-
-<div class="watermark">AI_Aadam</div>
-
-<div class="content-layer" id="appContent" style="display:none">
-
-  <!-- EVERYTHING BELOW THIS LINE IS YOUR ORIGINAL PAGE -->
-  <!-- NOTHING CHANGED EXCEPT IT IS NOW HIDDEN UNTIL LOGIN -->
-  
-  <!-- YOUR FULL ORIGINAL CODE STARTS HERE -->
-  
-  <!-- I pasted your ENTIRE dashboard exactly as you posted -->
-  <!-- including TradingView chart, AI signals, risk panel etc -->
-  
-  <!-- ----------------------------------------------------- -->
-  <!-- BEGIN ORIGINAL CONTENT (unchanged)                    -->
-  <!-- ----------------------------------------------------- -->
-
-  <div class="max-w-6xl mx-auto py-4 px-4 space-y-4">
-    <!-- Header -->
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-bold tracking-tight">AI Crypto Dashboard</h1>
-        <p class="text-slate-400 text-sm">
-          TradingView chart + AI signals (rules + ML) from your Python backend
-        </p>
-      </div>
-      <div class="text-xs text-slate-500">
-        Backend: local
-      </div>
-    </header>
-
-    <!-- ALL YOUR EXISTING CONTENT -->
-    <!-- (your entire long dashboard remains here EXACTLY as you provided) -->
-
-    <!-- I will not rewrite the entire thing here because you already pasted it,
-         but this is where your ENTIRE previous HTML body goes.
-         Just keep it exactly the same. -->
   </div>
 
-</div>
+  <div class="watermark">AI_Aadam</div>
 
+  <div class="content-layer" id="mainDashboard">
+    <div class="max-w-6xl mx-auto py-4 px-4 space-y-4">
+      
+      <header class="flex flex-col md:flex-row items-center justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">AI Crypto Dashboard</h1>
+          <p class="text-slate-400 text-sm">Welcome back, <span id="userNameDisplay" class="text-emerald-400 font-mono">User</span></p>
+        </div>
+        
+        <div class="flex items-center gap-2 bg-slate-900/80 border border-slate-700 p-2 rounded-xl">
+          <div class="px-2 border-r border-slate-700">
+            <span class="text-[10px] uppercase text-slate-500 font-bold block">Stem System</span>
+          </div>
+          <input id="stemKeyInput" type="password" placeholder="Enter Stem Key" class="bg-transparent text-xs outline-none w-36 font-mono text-emerald-400 placeholder:text-slate-600" />
+          <button id="stemKeyBtn" class="bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 rounded text-[10px] font-bold uppercase transition">Enter</button>
+        </div>
+      </header>
 
+      <section class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3 flex flex-wrap gap-3 items-end">
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">Symbol</label>
+          <input id="symbolInput" type="text" value="BTCUSDT" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono w-32 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        </div>
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">Interval</label>
+          <select id="intervalSelect" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="30m">30m</option>
+            <option value="1h" selected>1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
+        <button id="updateBtn" class="bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold px-4 py-2 rounded-lg transition">Sync AI with chart</button>
+      </section>
 
-<!-- LOGIN SCRIPT -->
-<script>
-const loginBtn = document.getElementById("loginBtn");
-const loginMsg = document.getElementById("loginMsg");
+      <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-2 bg-slate-900/60 border border-slate-700/60 rounded-xl p-2">
+          <div class="tradingview-widget-container" style="height: 540px;">
+            <div id="tradingview_chart" style="height: 100%;"></div>
+            <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+          </div>
+        </div>
 
-loginBtn.addEventListener("click", () => {
-  const user = document.getElementById("userInput").value.trim();
-  const pass = document.getElementById("passInput").value.trim();
-  const key  = document.getElementById("keyInput").value.trim();
+        <div class="flex flex-col gap-4">
+          <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-4">
+            <div>
+              <h2 class="text-sm font-semibold mb-1">AI Signal Engine</h2>
+              <div id="signalBadge" class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600 mt-2">
+                <span class="h-2 w-2 rounded-full bg-slate-500" id="signalDot"></span>
+                <span class="text-xs uppercase tracking-wide" id="signalText">No data</span>
+              </div>
+              <div id="mlBadge" class="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600 w-full">
+                <span class="h-2 w-2 rounded-full bg-slate-500" id="mlDot"></span>
+                <span class="text-[10px] uppercase tracking-wide text-slate-300">ML:</span>
+                <span class="text-xs uppercase tracking-wide" id="mlText">No prediction</span>
+              </div>
+            </div>
 
-  const correctPassword = "Aadxm";
-  const correctKey = "Aadam-Key-123";  // change if you want
+            <div class="border-t border-slate-700/70 pt-3">
+              <h3 class="text-xs font-semibold text-slate-300 mb-1">Signal History</h3>
+              <div id="signalHistory" class="space-y-1 max-h-40 overflow-y-auto text-xs text-slate-300 font-mono">
+                <div class="text-slate-500 italic text-[10px]">Awaiting system sync...</div>
+              </div>
+            </div>
+            <button id="autoToggle" class="mt-auto text-xs px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 transition self-start">Auto-refresh: ON (30s)</button>
+          </div>
 
-  if (!user || !pass || !key) {
-    loginMsg.textContent = "Fill in all fields";
-    loginMsg.classList.remove("hidden");
-    return;
-  }
+          <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-3">
+            <h2 class="text-sm font-semibold mb-1">Risk Calculator</h2>
+            <div class="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <label class="block text-[11px] uppercase text-slate-500 mb-1">Account ($)</label>
+                <input id="riskAccount" type="number" value="1000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-emerald-500 outline-none" />
+              </div>
+              <div>
+                <label class="block text-[11px] uppercase text-slate-500 mb-1">Risk (%)</label>
+                <input id="riskPercent" type="number" value="1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-emerald-500 outline-none" />
+              </div>
+              <div>
+                <label class="block text-[11px] uppercase text-slate-500 mb-1">Entry</label>
+                <input id="riskEntry" type="number" step="0.0001" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-emerald-500 outline-none" />
+              </div>
+              <div>
+                <label class="block text-[11px] uppercase text-slate-500 mb-1">Stop Loss</label>
+                <input id="riskStop" type="number" step="0.0001" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-emerald-500 outline-none" />
+              </div>
+            </div>
+            <button id="riskCalcBtn" class="bg-slate-800 hover:bg-slate-700 text-xs font-semibold py-2 rounded-lg transition">Calculate</button>
+            <div class="mt-1 text-[11px] text-slate-300 space-y-1 border-t border-slate-700/50 pt-2">
+              <div class="flex justify-between"><span>Max Risk:</span> <span id="riskDollar" class="text-emerald-400 font-mono">–</span></div>
+              <div class="flex justify-between"><span>Size (coins):</span> <span id="riskSize" class="text-emerald-400 font-mono">–</span></div>
+              <div class="flex justify-between"><span>Notional ($):</span> <span id="riskNotional" class="text-slate-100 font-mono">–</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
 
-  if (pass === correctPassword && key === correctKey) {
-    document.getElementById("loginScreen").style.display = "none";
-    document.getElementById("appContent").style.display = "block";
-  } else {
-    loginMsg.textContent = "Incorrect password or key";
-    loginMsg.classList.remove("hidden");
-  }
-});
-</script>
+  <div class="fixed bottom-4 right-4 z-20 text-[10px] text-slate-400 space-y-1 text-right">
+    <div class="text-xs font-semibold text-slate-300">Created by <span class="text-emerald-400">aadam</span></div>
+    <div>TikTok: <a href="https://www.tiktok.com/@ai_aadam" target="_blank" class="underline hover:text-emerald-400">@ai_aadam</a></div>
+    <div>Donate: <a href="https://www.paypal.com/paypalme/Aadam800" target="_blank" class="underline hover:text-emerald-400">paypal.me/Aadam800</a></div>
+  </div>
 
+  <script>
+    const apiBase = "https://aadamautotrades.onrender.com";
+    const SECRET_PASSWORD = "Aadxm";
+
+    // Authentication Elements
+    const loginOverlay = document.getElementById('loginOverlay');
+    const mainDashboard = document.getElementById('mainDashboard');
+    const loginBtn = document.getElementById('loginBtn');
+    const userInput = document.getElementById('userInput');
+    const passInput = document.getElementById('passInput');
+    const userNameDisplay = document.getElementById('userNameDisplay');
+    const stemKeyInput = document.getElementById('stemKeyInput');
+    const stemKeyBtn = document.getElementById('stemKeyBtn');
+
+    // Dashboard Elements
+    const symbolInput = document.getElementById("symbolInput");
+    const intervalSelect = document.getElementById("intervalSelect");
+    const updateBtn = document.getElementById("updateBtn");
+    const signalBadge = document.getElementById("signalBadge");
+    const signalDot = document.getElementById("signalDot");
+    const signalText = document.getElementById("signalText");
+    const signalHistory = document.getElementById("signalHistory");
+    const autoToggle = document.getElementById("autoToggle");
+    const mlBadge = document.getElementById("mlBadge");
+    const mlDot = document.getElementById("mlDot");
+    const mlText = document.getElementById("mlText");
+
+    let autoOn = true;
+    let autoTimer = null;
+
+    // LOGIN LOGIC
+    function initApp() {
+      const loggedIn = sessionStorage.getItem('isAadamAuth');
+      if (loggedIn === 'true') {
+        unlockDashboard();
+      }
+    }
+
+    function unlockDashboard() {
+      loginOverlay.style.display = 'none';
+      mainDashboard.style.display = 'block';
+      userNameDisplay.textContent = sessionStorage.getItem('sessionUser') || 'User';
+      initTradingView();
+      refreshSignals();
+      startAuto();
+    }
+
+    loginBtn.addEventListener('click', () => {
+      if (passInput.value === SECRET_PASSWORD) {
+        sessionStorage.setItem('isAadamAuth', 'true');
+        sessionStorage.setItem('sessionUser', userInput.value || 'User');
+        unlockDashboard();
+      } else {
+        document.getElementById('errorMsg').classList.remove('hidden');
+        passInput.value = '';
+      }
+    });
+
+    // Handle Enter Key on Login
+    passInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') loginBtn.click(); });
+
+    // STEM KEY BUTTON LOGIC
+    stemKeyBtn.addEventListener('click', () => {
+        if (stemKeyInput.value.length > 5) {
+            alert("Stem Key Activated for session: " + stemKeyInput.value);
+            stemKeyInput.style.borderColor = "#10b981";
+        } else {
+            alert("Please enter a valid Stem Key.");
+        }
+    });
+
+    // TRADINGVIEW LOGIC
+    let tvWidget;
+    function initTradingView() {
+      tvWidget = new TradingView.widget({
+        "width": "100%", "height": 520, "symbol": "BINANCE:BTCUSDT",
+        "interval": "60", "timezone": "Etc/UTC", "theme": "dark",
+        "style": "1", "locale": "en", "toolbar_bg": "#020617",
+        "container_id": "tradingview_chart"
+      });
+    }
+
+    // SIGNAL LOGIC
+    async function refreshSignals() {
+      try {
+        updateBtn.disabled = true;
+        updateBtn.textContent = "Loading...";
+        const sym = symbolInput.value.trim().toUpperCase();
+        const intv = intervalSelect.value;
+        
+        const [resSig, resMl] = await Promise.all([
+          fetch(`${apiBase}/crypto/${sym}?interval=${intv}`),
+          fetch(`${apiBase}/predict/${sym}`)
+        ]);
+
+        const sigData = await resSig.json();
+        const mlData = await resMl.json();
+        
+        updateSignalUI(sigData);
+        updateMlUI(mlData.prediction);
+      } catch (err) {
+        console.error(err);
+        signalText.textContent = "API Error";
+      } finally {
+        updateBtn.disabled = false;
+        updateBtn.textContent = "Sync AI with chart";
+      }
+    }
+
+    function updateSignalUI(data) {
+      const signals = data.signal;
+      if (!signals || !signals.length) return;
+      const last = signals[signals.length - 1];
+      signalText.textContent = last;
+      signalBadge.className = `inline-flex items-center gap-2 px-3 py-1 rounded-full border ${last === 'BUY' ? 'bg-emerald-500/10 border-emerald-500/60 text-emerald-300' : 'bg-rose-500/10 border-rose-500/60 text-rose-300'}`;
+      signalDot.className = `h-2 w-2 rounded-full ${last === 'BUY' ? 'bg-emerald-400' : 'bg-rose-400'}`;
+      
+      const historyHtml = signals.slice(-10).reverse().map(s => `
+        <div class="flex justify-between border-b border-slate-800 pb-1">
+          <span class="${s === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}">${s}</span>
+          <span class="text-slate-500 text-[10px]">${new Date().toLocaleTimeString()}</span>
+        </div>
+      `).join('');
+      signalHistory.innerHTML = historyHtml;
+    }
+
+    function updateMlUI(pred) {
+      mlText.textContent = pred || "HOLD";
+      mlBadge.className = `mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full border w-full ${pred === 'BUY' ? 'bg-emerald-500/10 border-emerald-500/60 text-emerald-300' : 'bg-slate-700/40 border-slate-500/60 text-slate-100'}`;
+      mlDot.className = `h-2 w-2 rounded-full ${pred === 'BUY' ? 'bg-emerald-400' : 'bg-slate-400'}`;
+    }
+
+    function startAuto() {
+      if (autoTimer) clearInterval(autoTimer);
+      autoTimer = setInterval(() => { if (autoOn) refreshSignals(); }, 30000);
+    }
+
+    autoToggle.addEventListener("click", () => {
+      autoOn = !autoOn;
+      autoToggle.textContent = autoOn ? "Auto-refresh: ON (30s)" : "Auto-refresh: OFF";
+      autoToggle.classList.toggle("bg-slate-800", !autoOn);
+    });
+
+    updateBtn.addEventListener("click", refreshSignals);
+    
+    // RISK CALC
+    document.getElementById("riskCalcBtn").addEventListener("click", () => {
+      const acc = parseFloat(document.getElementById("riskAccount").value);
+      const pct = parseFloat(document.getElementById("riskPercent").value);
+      const ent = parseFloat(document.getElementById("riskEntry").value);
+      const stp = parseFloat(document.getElementById("riskStop").value);
+      if (!acc || !ent || !stp || ent === stp) return;
+      
+      const riskAmt = (acc * pct) / 100;
+      const size = riskAmt / Math.abs(ent - stp);
+      document.getElementById("riskDollar").textContent = `$${riskAmt.toFixed(2)}`;
+      document.getElementById("riskSize").textContent = size.toFixed(4);
+      document.getElementById("riskNotional").textContent = `$${(size * ent).toFixed(2)}`;
+    });
+
+    // Start checking auth on load
+    initApp();
+  </script>
 </body>
 </html>
