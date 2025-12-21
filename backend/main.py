@@ -17,7 +17,7 @@ from openai import OpenAI
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.6.0",
+    version="0.7.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -634,6 +634,194 @@ def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
                 final_signal = "SELL"
 
     return final_signal
+
+# -------------------------------
+# Multi-timeframe summary for OpenAI
+# -------------------------------
+
+def build_tf_summary(symbol: str, interval: str, limit: int = 200):
+    """
+    Build a compact summary for one timeframe to send to OpenAI.
+    Uses get_klines + ta to avoid huge payloads.
+    """
+    raw = get_klines(symbol.upper(), interval=interval, limit=limit)
+    if not raw:
+        return {"has_data": False}
+
+    df = pd.DataFrame(
+        raw,
+        columns=[
+            "time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "_1", "_2", "_3", "_4", "_5", "_6",
+        ],
+    )
+
+    df["time"] = df["time"] // 1000
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+
+    # indicators
+    rsi = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+    ema20 = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
+    ema50 = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+    ema200 = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
+
+    macd_ind = ta.trend.MACD(
+        close=df["close"],
+        window_slow=26,
+        window_fast=12,
+        window_sign=9,
+    )
+    macd = macd_ind.macd()
+    macd_signal = macd_ind.macd_signal()
+
+    atr_ind = ta.volatility.AverageTrueRange(
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        window=14,
+    )
+    atr = atr_ind.average_true_range()
+
+    df["rsi"] = rsi
+    df["ema20"] = ema20
+    df["ema50"] = ema50
+    df["ema200"] = ema200
+    df["macd"] = macd
+    df["macd_signal"] = macd_signal
+    df["atr"] = atr
+    df["atr_perc"] = df["atr"] / df["close"]
+
+    df = df.dropna().reset_index(drop=True)
+    if len(df) < 10:
+        return {"has_data": False}
+
+    latest = df.iloc[-1]
+    first = df.iloc[0]
+
+    price_change_pct = (latest["close"] / first["close"] - 1) * 100.0
+    avg_vol = float(df["volume"].tail(50).mean())
+
+    signal = generate_signal(latest, interval=interval)
+
+    return {
+        "has_data": True,
+        "interval": interval,
+        "current_price": float(latest["close"]),
+        "price_change_pct": float(price_change_pct),
+        "rsi": float(latest["rsi"]),
+        "ema20": float(latest["ema20"]),
+        "ema50": float(latest["ema50"]),
+        "ema200": float(latest["ema200"]),
+        "macd": float(latest["macd"]),
+        "macd_signal": float(latest["macd_signal"]),
+        "atr_perc": float(latest["atr_perc"]),
+        "avg_volume_last_50": avg_vol,
+        "rule_signal": signal,
+    }
+
+@app.get("/ai_multi_tf_signal/{symbol}")
+def ai_multi_tf_signal(symbol: str):
+    """
+    Multi-timeframe AI signal using OpenAI.
+    Uses 1m,5m,15m,30m,1h,4h,1d summaries and returns one
+    combined BUY/SELL/HOLD idea with entry, SL, TP1/TP2 and risks.
+    """
+
+    if not OPENAI_API_KEY or client is None:
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "analysis": "OPENAI_API_KEY not set on server.",
+        }
+
+    timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+    tf_summaries = {}
+
+    for tf in timeframes:
+        tf_summaries[tf] = build_tf_summary(symbol, tf)
+
+    payload = {
+        "symbol": symbol.upper(),
+        "timeframes": tf_summaries,
+    }
+
+    prompt = f"""
+You are an experienced crypto day trader.
+You are given multi-timeframe data for {symbol.upper()}.
+Each timeframe includes: current price, price_change_pct, RSI, EMA20/50/200,
+MACD + signal, ATR%, avg volume and a rule-based signal.
+
+Tasks:
+
+1. Look at 1h, 4h, 1d FIRST for higher-timeframe bias.
+2. Then use 1m, 5m, 15m, 30m to refine intraday timing.
+
+Return ONE combined educational trade idea in EXACTLY this format:
+
+AI Multi-TF Signal
+Overall Bias: <Bullish/Bearish/Neutral> (<short reason using HTF first>)
+Action: <BUY/SELL/HOLD> (<confidence %>)
+Entry: <exact price or small range>
+Stop loss: <exact price> (<invalidation reason>)
+Take profit 1: <exact price> (<what this level is>)
+Take profit 2: <exact price> (<what this level is>)
+Risk ratio: <R:R number>
+Timeframes: <1-line summary of how 1m/5m/15m/30m/1h/4h/1d line up>
+Risks: <3 short risks in one line>
+
+Rules:
+- Use only numbers from the JSON data (current_price, etc.), do not invent random prices.
+- If some timeframe has has_data=false, just ignore it.
+- This is NOT financial advice; keep it hypothetical and risk-aware.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "text",
+                            "text": f"JSON data:\n{payload}",
+                        },
+                    ],
+                }
+            ],
+            max_tokens=800,
+        )
+
+        analysis_text = response.choices[0].message.content
+
+    except Exception as e:
+        print("[AI_MULTI_TF] Error:", e)
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "analysis": f"AI multi-timeframe error: {e}",
+        }
+
+    return {
+        "ok": True,
+        "symbol": symbol.upper(),
+        "analysis": analysis_text,
+        "timeframes": tf_summaries,
+    }
+
+# -------------------------------
+# Predict endpoint (ML)
+# -------------------------------
 
 @app.get("/predict/{symbol}")
 def predict(
