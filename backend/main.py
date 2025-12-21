@@ -6,10 +6,18 @@ import pandas as pd
 import ta
 import joblib
 import os
+import shutil
+import base64
+
+from openai import OpenAI
+
+# -------------------------------
+# FastAPI app setup
+# -------------------------------
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.5.1",
+    version="0.6.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -36,63 +44,126 @@ print("FRONTEND_DIR:", FRONTEND_DIR)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
-
 @app.get("/", include_in_schema=False)
 def root():
     return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
-
 
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
 
+# -------------------------------
+# OpenAI vision client + uploads dir
+# -------------------------------
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def encode_image_to_base64(path: str) -> str:
+    with open(path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
 # -------------------------------
-# Simple placeholder for chart-image AI analysis
+# REAL chart-image AI analysis
 # -------------------------------
-
-def fake_chart_ai_analysis(text_hint: str = "") -> str:
-    """
-    TEMP: replace later with real GPT‑4o vision call.
-    Right now just returns a structured example response.
-    """
-    return (
-        "Bias: Bullish intraday.\n"
-        "- Liquidity: Recent sweep of equal lows, price reclaimed range.\n"
-        "- Structure: Higher lows, EMAs stacked bullish, momentum building.\n"
-        "- Idea: Consider long after shallow pullback.\n"
-        "- Stop loss: Below last swing low / liquidity grab.\n"
-        "- Take profit 1: Prior high.\n"
-        "- Take profit 2: Next HTF supply or big wick high.\n"
-        "- Risk: Avoid if news or huge wick against direction."
-    )
-
 
 @app.post("/analyze_chart_image")
 async def analyze_chart_image(
     file: UploadFile = File(...),
 ):
     """
-    Accepts an uploaded chart image and returns AI-style analysis text.
-    Later you can swap fake_chart_ai_analysis() with a real vision API.
+    Accepts an uploaded chart image and returns REAL AI analysis text
+    using OpenAI GPT-4o vision. Gives bias, action (BUY/SELL/HOLD),
+    entry, SL, TP1, TP2, R:R, structure and risks.
     """
-    content = await file.read()
-    size_kb = len(content) / 1024
 
-    if size_kb > 2048:
+    # read + size check
+    contents = await file.read()
+    size_kb = len(contents) / 1024
+
+    if size_kb > 4096:
         return {
             "ok": False,
-            "message": "Image too large (max ~2MB)",
+            "message": "Image too large (max ~4MB)",
         }
 
-    analysis_text = fake_chart_ai_analysis(file.filename)
+    # save to disk
+    safe_name = file.filename.replace(" ", "_")
+    save_path = os.path.join(UPLOAD_DIR, safe_name)
+    with open(save_path, "wb") as buffer:
+        buffer.write(contents)
+
+    # encode to base64 for OpenAI
+    base64_image = encode_image_to_base64(save_path)
+
+    # if no API key, fail nicely
+    if not OPENAI_API_KEY:
+        return {
+            "ok": False,
+            "filename": file.filename,
+            "analysis": "Server missing OPENAI_API_KEY. Contact admin.",
+        }
+
+    prompt = """
+You are a professional day trader. Analyze this TRADING CHART image only.
+If this is NOT a trading chart, clearly say that and do NOT invent prices.
+
+If it IS a trading chart, extract REAL price levels from the chart and answer
+in EXACTLY this format (no extra text, no bullet dashes):
+
+AI Image Analysis
+Bias: <Bullish/Bearish/Neutral> (<short reason>)
+Action: <BUY/SELL/HOLD> (<confidence %>)
+Entry: <exact price or small range>
+Stop loss: <exact price> (<why here>)
+Take profit 1: <exact price> (<what this level is>)
+Take profit 2: <exact price> (<what this level is>)
+Risk ratio: <R:R number>
+Structure: <key support/resistance + structure notes>
+Risks: <3 short risks in one line>
+
+Use only prices you can clearly see on the chart (y-axis / labels / candles).
+If you cannot read prices, say: 'Cannot read price scale clearly, no exact levels.'
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_tokens=800,
+        )
+
+        analysis_text = response.choices[0].message.content
+
+    except Exception as e:
+        print("[VISION] Error:", e)
+        return {
+            "ok": False,
+            "filename": file.filename,
+            "analysis": f"Vision API error: {e}",
+        }
 
     return {
         "ok": True,
         "filename": file.filename,
         "analysis": analysis_text,
     }
-
 
 # -------------------------------
 # CryptoCompare OHLC data
@@ -114,7 +185,6 @@ INTERVAL_CONFIG = {
     "4h":  ("histohour",   4),
     "1d":  ("histoday",    1),
 }
-
 
 def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
     symbol = symbol.upper()
@@ -168,7 +238,6 @@ def get_klines(symbol: str, interval: str = "1m", limit: int = 200):
         ])
 
     return klines
-
 
 # -------------------------------
 # Rule-based signal (chart signals)
@@ -261,7 +330,6 @@ def generate_signal(row, interval: str = "1h"):
             return "SELL"
 
     return "HOLD"
-
 
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
@@ -358,7 +426,6 @@ def crypto(symbol: str, interval: str = Query("1h")):
         "symbol": symbol.upper(),
     }
 
-
 # -------------------------------
 # ML models: load + predict
 # -------------------------------
@@ -371,7 +438,6 @@ MODEL_PATHS = {
 }
 
 ml_bundles = {}  # timeframe -> {"model": ..., "feature_cols": [...], "interval": "1m/5m/15m"}
-
 
 def load_models():
     global ml_bundles
@@ -390,9 +456,7 @@ def load_models():
         except Exception as e:
             print(f"[ML] Failed to load {tf} model from {path}: {e}")
 
-
 load_models()
-
 
 def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -447,7 +511,6 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna().reset_index(drop=True)
     return df
 
-
 def map_proba_to_signal(p_good: float, timeframe: str) -> str:
     """
     MEDIUM RISK DEFAULT - no risk parameter needed
@@ -467,7 +530,6 @@ def map_proba_to_signal(p_good: float, timeframe: str) -> str:
     if p_good >= hold_th:
         return "HOLD"
     return "SELL"
-
 
 # -------------------------------
 # Simple SMC helpers (BoS/CHoCH + FVG)
@@ -526,7 +588,6 @@ def detect_bos_choch(df: pd.DataFrame):
         "choch_bear": bool(choch_bear),
     }
 
-
 def detect_fvg(df: pd.DataFrame):
     if len(df) < 3:
         return {"fvg_bull": False, "fvg_bear": False}
@@ -539,7 +600,6 @@ def detect_fvg(df: pd.DataFrame):
     fvg_bull = l0 > h2
 
     return {"fvg_bull": bool(fvg_bull), "fvg_bear": bool(fvg_bear)}
-
 
 def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
     latest = df.iloc[-1]
@@ -569,7 +629,6 @@ def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
                 final_signal = "SELL"
 
     return final_signal
-
 
 @app.get("/predict/{symbol}")
 def predict(
