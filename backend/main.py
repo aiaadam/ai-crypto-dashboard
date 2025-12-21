@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import requests
@@ -6,7 +6,6 @@ import pandas as pd
 import ta
 import joblib
 import os
-
 
 app = FastAPI(
     title="AI Crypto Dashboard",
@@ -46,6 +45,53 @@ def root():
 @app.get("/__test")
 def test_route():
     return {"msg": "this is the correct main.py"}
+
+
+# -------------------------------
+# Simple placeholder for chart-image AI analysis
+# -------------------------------
+
+def fake_chart_ai_analysis(text_hint: str = "") -> str:
+    """
+    TEMP: replace later with real GPT‑4o vision call.
+    Right now just returns a structured example response.
+    """
+    return (
+        "Bias: Bullish intraday.\n"
+        "- Liquidity: Recent sweep of equal lows, price reclaimed range.\n"
+        "- Structure: Higher lows, EMAs stacked bullish, momentum building.\n"
+        "- Idea: Consider long after shallow pullback.\n"
+        "- Stop loss: Below last swing low / liquidity grab.\n"
+        "- Take profit 1: Prior high.\n"
+        "- Take profit 2: Next HTF supply or big wick high.\n"
+        "- Risk: Avoid if news or huge wick against direction."
+    )
+
+
+@app.post("/analyze_chart_image")
+async def analyze_chart_image(
+    file: UploadFile = File(...),
+):
+    """
+    Accepts an uploaded chart image and returns AI-style analysis text.
+    Later you can swap fake_chart_ai_analysis() with a real vision API.
+    """
+    content = await file.read()
+    size_kb = len(content) / 1024
+
+    if size_kb > 2048:
+        return {
+            "ok": False,
+            "message": "Image too large (max ~2MB)",
+        }
+
+    analysis_text = fake_chart_ai_analysis(file.filename)
+
+    return {
+        "ok": True,
+        "filename": file.filename,
+        "analysis": analysis_text,
+    }
 
 
 # -------------------------------
@@ -410,11 +456,9 @@ def map_proba_to_signal(p_good: float, timeframe: str) -> str:
     timeframe = timeframe.lower()
 
     if timeframe == "1m":
-        # 1m: medium risk thresholds
         buy_th = 0.60
         hold_th = 0.50
     else:
-        # other timeframes: medium risk thresholds
         buy_th = 0.65
         hold_th = 0.55
 
@@ -430,10 +474,6 @@ def map_proba_to_signal(p_good: float, timeframe: str) -> str:
 # -------------------------------
 
 def detect_bos_choch(df: pd.DataFrame):
-    """
-    Very rough structure detection using recent swing highs/lows.
-    Returns simple bool flags; this is intentionally conservative.
-    """
     if len(df) < 10:
         return {
             "bos_bull": False,
@@ -444,14 +484,12 @@ def detect_bos_choch(df: pd.DataFrame):
 
     d = df.tail(50).reset_index(drop=True)
 
-    # mark swing highs/lows (3-bar pattern)
     swing_high = (d["high"] > d["high"].shift(1)) & (d["high"] > d["high"].shift(-1))
     swing_low = (d["low"] < d["low"].shift(1)) & (d["low"] < d["low"].shift(-1))
 
     d["swing_high"] = swing_high
     d["swing_low"] = swing_low
 
-    # collect recent swings
     highs = d[d["swing_high"]]
     lows = d[d["swing_low"]]
 
@@ -469,7 +507,6 @@ def detect_bos_choch(df: pd.DataFrame):
         if last_low < prev_low:
             bos_bear = True
 
-    # simple CHoCH: after bullish BoS, break a low; after bearish BoS, break a high
     if bos_bull and len(lows) >= 2:
         last_low = lows.iloc[-1]["low"]
         prev_low = lows.iloc[-2]["low"]
@@ -491,12 +528,6 @@ def detect_bos_choch(df: pd.DataFrame):
 
 
 def detect_fvg(df: pd.DataFrame):
-    """
-    Simple 3-candle Fair Value Gap:
-    - bearish FVG: high[0] < low[2]
-    - bullish FVG: low[0] > high[2]
-    Uses the last 3 candles only.
-    """
     if len(df) < 3:
         return {"fvg_bull": False, "fvg_bear": False}
 
@@ -511,12 +542,6 @@ def detect_fvg(df: pd.DataFrame):
 
 
 def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
-    """
-    Overlay SMC-style info on top of AI decision:
-    - uses BoS/CHoCH + FVG
-    - only nudges signals when indicators + p_good agree
-    - avoids forcing buys in extreme RSI conditions.
-    """
     latest = df.iloc[-1]
 
     rsi = latest["rsi"]
@@ -529,7 +554,6 @@ def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
     bullish_setup = swing_info["choch_bull"] and fvg_info["fvg_bull"]
     bearish_setup = swing_info["choch_bear"] and fvg_info["fvg_bear"]
 
-    # Bullish SMC setup: only if not overbought and AI not strongly bearish
     if bullish_setup:
         if rsi < 70 and ema_20 > ema_50 and p_good > 0.50:
             if final_signal == "SELL":
@@ -537,7 +561,6 @@ def smc_overlay(df: pd.DataFrame, final_signal: str, p_good: float) -> str:
             elif final_signal == "HOLD":
                 final_signal = "BUY"
 
-    # Bearish SMC setup: only if not extremely oversold and AI probability is low
     if bearish_setup:
         if rsi > 30 and ema_20 < ema_50 and p_good < 0.50:
             if final_signal == "BUY":
@@ -634,7 +657,7 @@ def predict(
     final_signal = map_proba_to_signal(p_good, timeframe)
     final_signal = smc_overlay(df, final_signal, p_good)
 
-    # ----- extra 1m behaviour: avoid buying dumps, sell earlier on drops -----
+    # extra 1m behaviour: avoid buying dumps, sell earlier on drops
     if timeframe == "1m":
         last = df.tail(3)
         price_trend = last["close"].iloc[-1] - last["close"].iloc[0]
@@ -642,23 +665,17 @@ def predict(
         ema50 = last["ema_50"].iloc[-1] if "ema_50" in last.columns else None
 
         if ema20 is not None and ema50 is not None:
-            # strong short-term downtrend
             strong_down = price_trend < 0 and ema20 < ema50
-            # strong short-term uptrend
             strong_up = price_trend > 0 and ema20 > ema50
 
-            # 1) Don't BUY into a clear dump -> downgrade to HOLD
             if final_signal == "BUY" and strong_down:
                 final_signal = "HOLD"
 
-            # 2) If AI is only HOLD but price is clearly starting to dump, flip to SELL sooner
             if final_signal == "HOLD" and strong_down and p_good < 0.45:
                 final_signal = "SELL"
 
-            # 3) Optional: if HOLD and strong uptrend with decent prob, upgrade to BUY
             if final_signal == "HOLD" and strong_up and p_good > 0.55:
                 final_signal = "BUY"
-    # -------------------------------------------------------------------------
 
     return {
         "ok": True,
