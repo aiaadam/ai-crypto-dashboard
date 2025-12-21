@@ -57,7 +57,12 @@ def test_route():
 # -------------------------------
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+
+client = None
+if OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    print("WARNING: OPENAI_API_KEY is not set - vision endpoint will be disabled.")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -100,7 +105,7 @@ async def analyze_chart_image(
     base64_image = encode_image_to_base64(save_path)
 
     # if no API key, fail nicely
-    if not OPENAI_API_KEY:
+    if not OPENAI_API_KEY or client is None:
         return {
             "ok": False,
             "filename": file.filename,
