@@ -292,8 +292,5 @@ def generate_signal(row, interval: str = "1h"):
     if (
         rsi_strong_bull
         and macd_bull
-# Line 292 - FIXED:
-if (
-    rsi < 30 and 
-    macd > signal
-):  # ← ADD ) + :
+    ):  # ← ONLY ADD ) + :
+        return "BUY"
