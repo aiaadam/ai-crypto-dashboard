@@ -1,363 +1,669 @@
-from fastapi import FastAPI, Query, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-import os
-import base64
-import time
-from typing import List
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Crypto Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #020617; }
+    .watermark {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 0;
+      font-size: clamp(4rem, 12vw, 10rem);
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      color: rgba(148, 163, 184, 0.05);
+      text-transform: uppercase;
+      user-select: none;
+    }
+    .content-layer {
+      position: relative;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-100">
+  <div class="watermark">AI_Aadam</div>
 
-from openai import OpenAI
+  <div class="content-layer">
+    <div class="max-w-6xl mx-auto py-4 px-4 space-y-4">
+      <!-- Header -->
+      <header class="flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">AI Crypto Dashboard</h1>
+          <p class="text-slate-400 text-sm">
+            TradingView chart + AI signals (rules + ML + OpenAI) from your Python backend
+          </p>
+        </div>
+        <div class="text-xs text-slate-500">
+          Backend: live
+        </div>
+      </header>
 
-# -------------------------------
-# FastAPI app setup
-# -------------------------------
-app = FastAPI(
-    title="AI Crypto Dashboard",
-    version="0.7.1",
-    docs_url="/docs",
-    redoc_url=None,
-    openapi_url="/openapi.json",
-)
+      <!-- Controls -->
+      <section class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3 flex flex-wrap gap-3 items-end">
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">Symbol</label>
+          <input
+            id="symbolInput"
+            type="text"
+            value="BTCUSDT"
+            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono w-32 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
 
-# CORS
-origins = [
-    "https://aiautotrades.onrender.com",
-    "http://localhost",
-    "http://localhost:8000",
-]
+        <div>
+          <label class="block text-xs uppercase text-slate-400 mb-1">Interval (rules)</label>
+          <select
+            id="intervalSelect"
+            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="30m">30m</option>
+            <option value="1h" selected>1h</option>
+            <option value="4h">4h</option>
+            <option value="1d">1d</option>
+          </select>
+        </div>
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        <button
+          id="updateBtn"
+          class="bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold px-4 py-2 rounded-lg transition"
+        >
+          Sync AI with chart
+        </button>
 
-# FRONTEND
-FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
-print("FRONTEND_DIR:", FRONTEND_DIR)
+        <p class="text-xs text-slate-500 ml-auto">
+          TradingView chart symbol must match your backend symbol (e.g. BINANCE:BTCUSDT).
+        </p>
+      </section>
 
-app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+      <!-- Main grid: chart + AI + risk -->
+      <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- TradingView chart -->
+        <div class="lg:col-span-2 bg-slate-900/60 border border-slate-700/60 rounded-xl p-2">
+          <div class="tradingview-widget-container" style="height: 540px;">
+            <div id="tradingview_chart" style="height: 100%;"></div>
+            <div class="text-[10px] text-slate-500 mt-1">
+              Charts by
+              <a href="https://www.tradingview.com" rel="noopener nofollow" target="_blank" class="underline">
+                TradingView
+              </a>
+            </div>
+            <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+            <script type="text/javascript">
+              let tvWidget;
+              function initTradingView() {
+                tvWidget = new TradingView.widget({
+                  "width": "100%",
+                  "height": 520,
+                  "symbol": "BINANCE:BTCUSDT",
+                  "interval": "60",
+                  "timezone": "Etc/UTC",
+                  "theme": "dark",
+                  "style": "1",
+                  "locale": "en",
+                  "toolbar_bg": "#020617",
+                  "enable_publishing": false,
+                  "allow_symbol_change": true,
+                  "container_id": "tradingview_chart"
+                });
+              }
+              document.addEventListener("DOMContentLoaded", initTradingView);
+            </script>
+          </div>
+        </div>
 
-@app.get("/", include_in_schema=False)
-def root():
-    return {"status": "ok", "message": "Aadam AutoTrades backend is running"}
+        <!-- AI Signal panel -->
+        <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-4">
+          <div>
+            <h2 class="text-sm font-semibold mb-1">AI Signal</h2>
+            <p class="text-xs text-slate-400 mb-2">
+              Rule-based signals (RSI + EMA + MACD + Bollinger + Fibonacci), ML prediction, and OpenAI multi-timeframe analysis.
+            </p>
 
-@app.get("/__test")
-def test_route():
-    return {"msg": "this is the correct main.py"}
+            <!-- Rule-based signal badge -->
+            <div id="signalBadge" class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600">
+              <span class="h-2 w-2 rounded-full bg-slate-500" id="signalDot"></span>
+              <span class="text-xs uppercase tracking-wide" id="signalText">No data</span>
+            </div>
 
-# -------------------------------
-# Grok client + uploads dir
-# -------------------------------
-GROK_API_KEY = os.getenv("GROK_API_KEY")
+            <!-- ML prediction badge -->
+            <div id="mlBadge" class="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600">
+              <span class="h-2 w-2 rounded-full bg-slate-500" id="mlDot"></span>
+              <span class="text-[10px] uppercase tracking-wide text-slate-300">ML:</span>
+              <span class="text-xs uppercase tracking-wide" id="mlText">No prediction</span>
+            </div>
 
-client = None
-if GROK_API_KEY:
-    try:
-        client = OpenAI(
-            api_key=GROK_API_KEY,
-            base_url="https://api.x.ai/v1",
-        )
-        print("✅ GROK: Connected successfully!")
-    except Exception as e:
-        print(f"❌ GROK: Connection failed: {e}")
-        client = None
-else:
-    print("⚠️ GROK: API key not set - using mock AI")
+            <div class="mt-3 text-xs text-slate-400 space-y-1">
+              <div>Symbol: <span id="aiSymbol" class="font-mono text-slate-100">–</span></div>
+              <div>Interval (rules): <span id="aiInterval" class="font-mono text-slate-100">–</span></div>
+              <div>Last updated: <span id="aiUpdated" class="font-mono text-slate-100">–</span></div>
+            </div>
+          </div>
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+          <div class="border-t border-slate-700/70 pt-3">
+            <h3 class="text-xs font-semibold text-slate-300 mb-1">Recent signals</h3>
+            <div id="signalHistory" class="space-y-1 max-h-40 overflow-y-auto text-xs text-slate-300 font-mono">
+              <div class="text-slate-500">No history yet.</div>
+            </div>
+          </div>
 
-def encode_image_to_base64(path: str) -> str:
-    with open(path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
+          <!-- OpenAI multi-timeframe signal -->
+          <div class="border-t border-slate-700/70 pt-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold text-slate-300">AI Multi-TF Signal (OpenAI)</h3>
+              <button
+                id="btn-ai-signals-openai"
+                class="text-[11px] px-2 py-1 rounded-lg border border-emerald-500 text-emerald-300 hover:bg-emerald-500/10 transition"
+              >
+                Analyze all timeframes
+              </button>
+            </div>
+            <pre
+              id="ai-signals-openai-box"
+              class="text-[11px] whitespace-pre-wrap bg-slate-950/60 border border-slate-700/70 rounded-lg p-2 text-slate-200 min-h-[80px]"
+            >Click "Analyze all timeframes" to get OpenAI signal here.</pre>
+          </div>
 
-# -------------------------------
-# Chart image AI analysis
-# -------------------------------
-@app.post("/analyze_chart_image")
-async def analyze_chart_image(file: UploadFile = File(...)):
-    contents = await file.read()
-    size_kb = len(contents) / 1024
+          <button
+            id="autoToggle"
+            class="mt-auto text-xs px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 transition self-start"
+          >
+            Auto-refresh: ON (30s)
+          </button>
+        </div>
 
-    if size_kb > 4096:
-        return {"ok": False, "message": "Image too large (max ~4MB)"}
+        <!-- Risk / Position Size panel -->
+        <div class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 flex flex-col gap-3">
+          <div>
+            <h2 class="text-sm font-semibold mb-1">Risk & Position Size</h2>
+            <p class="text-xs text-slate-400">
+              Calculate position size based on account size, risk %, entry, and stop.
+            </p>
+          </div>
 
-    safe_name = file.filename.replace(" ", "_")
-    save_path = os.path.join(UPLOAD_DIR, safe_name)
-    with open(save_path, "wb") as buffer:
-        buffer.write(contents)
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Account size ($)</label>
+              <input
+                id="riskAccount"
+                type="number"
+                value="1000"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Risk per trade (%)</label>
+              <input
+                id="riskPercent"
+                type="number"
+                value="1"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Entry price</label>
+              <input
+                id="riskEntry"
+                type="number"
+                step="0.0001"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] uppercase text-slate-400 mb-1">Stop loss price</label>
+              <input
+                id="riskStop"
+                type="number"
+                step="0.0001"
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
 
-    base64_image = encode_image_to_base64(save_path)
+          <button
+            id="riskCalcBtn"
+            class="mt-1 bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition self-start"
+          >
+            Calculate position
+          </button>
 
-    if client is None:
-        # Mock response if Grok not available
-        return {
-            "ok": True,
-            "filename": file.filename,
-            "analysis": """AI Image Analysis
-Bias: Bullish (higher highs forming)
-Action: BUY (75%)
-Entry: 95150-95200
-Stop loss: 94900 (below recent low)
-Take profit 1: 95500 (next resistance)
-Take profit 2: 96000 (major supply zone)
-Risk ratio: 1:3
-Structure: Higher lows + BoS confirmed
-Risks: Fakeout below 95000, sudden volume spike, weekend gap""",
+          <div class="mt-1 text-xs text-slate-300 space-y-1">
+            <div>Max risk: <span id="riskDollar" class="font-mono text-emerald-300">–</span></div>
+            <div>Position size (coins): <span id="riskSize" class="font-mono text-emerald-300">–</span></div>
+            <div>Notional size ($): <span id="riskNotional" class="font-mono text-slate-200">–</span></div>
+          </div>
+
+          <p class="mt-1 text-[10px] text-slate-500">
+            Size = (Account × Risk%) ÷ |Entry − Stop|. Assumes 1x spot (no leverage).
+          </p>
+        </div>
+      </section>
+
+      <!-- Image AI Chart Analysis -->
+      <section class="bg-slate-900/60 border border-slate-700/60 rounded-xl p-4 mt-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-sm font-semibold mb-1">Image Chart Analysis (AI)</h2>
+            <p class="text-xs text-slate-400">
+              Upload a screenshot of any chart. AI will analyse liquidity, sweeps, bias, and suggest entry, SL, TP.
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-col md:flex-row gap-4">
+          <div class="w-full md:w-1/3 space-y-2">
+            <input
+              id="chartImageInput"
+              type="file"
+              accept="image/*"
+              class="w-full text-xs text-slate-200
+                     file:mr-3 file:py-1.5 file:px-3
+                     file:rounded-md file:border-0
+                     file:text-xs file:font-semibold
+                     file:bg-emerald-600 file:text-white
+                     hover:file:bg-emerald-500
+                     cursor-pointer"
+            />
+            <button
+              id="analyzeImageBtn"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold px-3 py-2 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Analyze chart image
+            </button>
+            <p id="imageStatus" class="text-[11px] text-slate-400">
+              Select a clear screenshot of a single chart.
+            </p>
+          </div>
+
+          <div class="w-full md:w-1/3">
+            <div class="border border-slate-700/70 rounded-lg overflow-hidden bg-slate-950/60 flex items-center justify-center min-h-[140px]">
+              <img id="chartImagePreview" src="" alt="Chart preview" class="max-h-64 max-w-full object-contain hidden">
+              <span id="noPreviewText" class="text-xs text-slate-500">No image selected</span>
+            </div>
+          </div>
+
+          <div class="w-full md:w-1/3">
+            <label class="block text-[11px] uppercase text-slate-400 mb-1">AI Image Analysis</label>
+            <pre id="imageAnalysisOutput" class="text-[11px] whitespace-pre-wrap bg-slate-950/60 border border-slate-700/70 rounded-lg p-3 text-slate-200 min-h-[140px]">
+Upload an image and click "Analyze chart image" to see AI commentary here.
+            </pre>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Bottom-right credits box -->
+  <div class="fixed bottom-4 right-4 z-20 text-[10px] text-slate-400 space-y-1 text-right">
+    <div class="text-xs font-semibold text-slate-300">
+      Created by <span class="text-emerald-400">aadam</span>
+    </div>
+    <div>
+      TikTok:
+      <a href="https://www.tiktok.com/@ai_aadam"
+         target="_blank"
+         rel="noopener noreferrer"
+         class="underline hover:text-emerald-400">
+        @ai_aadam
+      </a>
+    </div>
+    <div>
+      Donate:
+      <a href="https://www.paypal.com/paypalme/Aadam800"
+         target="_blank"
+         rel="noopener noreferrer"
+         class="underline hover:text-emerald-400">
+        paypal.me/Aadam800
+      </a>
+    </div>
+    <div>
+      Contact me: <span class="text-slate-200">07506254663</span>
+    </div>
+  </div>
+
+  <script>
+    const apiBase = "https://aadamautotrades.onrender.com";
+
+    const symbolInput = document.getElementById("symbolInput");
+    const intervalSelect = document.getElementById("intervalSelect");
+    const updateBtn = document.getElementById("updateBtn");
+
+    const signalBadge = document.getElementById("signalBadge");
+    const signalDot = document.getElementById("signalDot");
+    const signalText = document.getElementById("signalText");
+    const aiSymbol = document.getElementById("aiSymbol");
+    const aiInterval = document.getElementById("aiInterval");
+    const aiUpdated = document.getElementById("aiUpdated");
+    const signalHistory = document.getElementById("signalHistory");
+    const autoToggle = document.getElementById("autoToggle");
+
+    const mlBadge = document.getElementById("mlBadge");
+    const mlDot = document.getElementById("mlDot");
+    const mlText = document.getElementById("mlText");
+
+    const riskAccount = document.getElementById("riskAccount");
+    const riskPercent = document.getElementById("riskPercent");
+    const riskEntry = document.getElementById("riskEntry");
+    const riskStop = document.getElementById("riskStop");
+    const riskCalcBtn = document.getElementById("riskCalcBtn");
+    const riskDollar = document.getElementById("riskDollar");
+    const riskSize = document.getElementById("riskSize");
+    const riskNotional = document.getElementById("riskNotional");
+
+    // OpenAI multi-TF UI
+    const aiSignalsOpenAiBox = document.getElementById("ai-signals-openai-box");
+    const btnAiSignalsOpenAi = document.getElementById("btn-ai-signals-openai");
+
+    let autoOn = true;
+    let autoTimer = null;
+    let currentSymbol = symbolInput.value.trim().toUpperCase();
+
+    function formatTimestamp(tsSeconds) {
+      if (!tsSeconds) return "–";
+      const d = new Date(tsSeconds * 1000);
+      return d.toLocaleString("en-GB");
+    }
+
+    function updateSignalUI(data) {
+      const signals = data.signal;
+      if (!signals || !signals.length) {
+        signalText.textContent = "No data";
+        signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-600";
+        signalDot.className = "h-2 w-2 rounded-full bg-slate-500";
+        aiSymbol.textContent = data.symbol || "–";
+        aiInterval.textContent = data.interval || "–";
+        aiUpdated.textContent = "–";
+        signalHistory.innerHTML = '<div class="text-slate-500">No history yet.</div>';
+        return;
+      }
+
+      const lastSignal = signals[signals.length - 1];
+      const lastTime = data.time[data.time.length - 1];
+
+      signalText.textContent = lastSignal;
+
+      signalBadge.className = "inline-flex items-center gap-2 px-3 py-1 rounded-full border";
+      if (lastSignal === "BUY") {
+        signalBadge.classList.add("bg-emerald-500/10", "border-emerald-500/60", "text-emerald-300");
+        signalDot.className = "h-2 w-2 rounded-full bg-emerald-400";
+      } else if (lastSignal === "SELL") {
+        signalBadge.classList.add("bg-rose-500/10", "border-rose-500/60", "text-rose-300");
+        signalDot.className = "h-2 w-2 rounded-full bg-rose-400";
+      } else {
+        signalBadge.classList.add("bg-slate-700/40", "border-slate-500/60", "text-slate-100");
+        signalDot.className = "h-2 w-2 rounded-full bg-slate-400";
+      }
+
+      aiSymbol.textContent = data.symbol || "–";
+      aiInterval.textContent = data.interval || "–";
+      aiUpdated.textContent = formatTimestamp(lastTime);
+
+      const items = [];
+      const len = Math.min(signals.length, 20);
+      for (let i = 0; i < len; i++) {
+        const s = signals[signals.length - 1 - i];
+        const t = data.time[data.time.length - 1 - i];
+        const color =
+          s === "BUY"
+            ? "text-emerald-300"
+            : s === "SELL"
+            ? "text-rose-300"
+            : "text-slate-300";
+        items.push(
+          `<div class="flex justify-between gap-2">
+             <span class="${color}">${s}</span>
+             <span class="text-slate-500">${formatTimestamp(t)}</span>
+           </div>`
+        );
+      }
+      signalHistory.innerHTML = items.join("");
+    }
+
+    function updateMlUI(prediction) {
+      const p = prediction || "HOLD";
+
+      mlBadge.className = "mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full border";
+      if (p === "BUY") {
+        mlBadge.classList.add("bg-emerald-500/10", "border-emerald-500/60", "text-emerald-300");
+        mlDot.className = "h-2 w-2 rounded-full bg-emerald-400";
+      } else if (p === "SELL") {
+        mlBadge.classList.add("bg-rose-500/10", "border-rose-500/60", "text-rose-300");
+        mlDot.className = "h-2 w-2 rounded-full bg-rose-400";
+      } else {
+        mlBadge.classList.add("bg-slate-700/40", "border-slate-500/60", "text-slate-100");
+        mlDot.className = "h-2 w-2 rounded-full bg-slate-400";
+      }
+
+      mlText.textContent = p;
+    }
+
+    async function fetchSignals(intervalOverride) {
+      const symbol = currentSymbol;
+      const interval = intervalOverride || intervalSelect.value;
+      const url = `${apiBase}/crypto/${symbol}?interval=${interval}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("API error " + res.status);
+      return res.json();
+    }
+
+    async function fetchMlPrediction() {
+      const symbol = currentSymbol;
+      const url = `${apiBase}/predict/${symbol}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("ML API error " + res.status);
+      return res.json();
+    }
+
+    async function refreshSignals() {
+      try {
+        updateBtn.disabled = true;
+        updateBtn.textContent = "Loading...";
+
+        const [data, ml] = await Promise.all([
+          fetchSignals(),
+          fetchMlPrediction(),
+        ]);
+
+        updateSignalUI(data);
+        updateMlUI(ml.prediction);
+      } catch (err) {
+        console.error(err);
+        signalText.textContent = "Error";
+        signalBadge.className =
+          "inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/60 text-rose-300";
+        signalDot.className = "h-2 w-2 rounded-full bg-rose-400";
+        updateMlUI("HOLD");
+      } finally {
+        updateBtn.disabled = false;
+        updateBtn.textContent = "Sync AI with chart";
+      }
+    }
+
+    function startAuto() {
+      if (autoTimer) clearInterval(autoTimer);
+      autoTimer = setInterval(() => {
+        if (autoOn) refreshSignals();
+      }, 30000);
+    }
+
+    autoToggle.addEventListener("click", () => {
+      autoOn = !autoOn;
+      if (autoOn) {
+        autoToggle.textContent = "Auto-refresh: ON (30s)";
+        autoToggle.classList.remove("bg-slate-800");
+        startAuto();
+      } else {
+        autoToggle.textContent = "Auto-refresh: OFF";
+        autoToggle.classList.add("bg-slate-800");
+      }
+    });
+
+    // keep currentSymbol + TradingView in sync
+    function updateSymbolFromInput() {
+      currentSymbol = symbolInput.value.trim().toUpperCase();
+      symbolInput.value = currentSymbol;
+      if (window.tvWidget && tvWidget.chart) {
+        try {
+          tvWidget.chart().setSymbol(`BINANCE:${currentSymbol}`);
+        } catch (e) {
+          console.warn("Unable to update TradingView symbol", e);
+        }
+      }
+    }
+
+    updateBtn.addEventListener("click", () => {
+      updateSymbolFromInput();
+      refreshSignals();
+    });
+
+    symbolInput.addEventListener("keyup", (e) => {
+      if (e.key === "Enter") {
+        updateSymbolFromInput();
+        refreshSignals();
+      }
+    });
+
+    function calcRisk() {
+      const account = parseFloat(riskAccount.value);
+      const pct = parseFloat(riskPercent.value);
+      const entry = parseFloat(riskEntry.value);
+      const stop = parseFloat(riskStop.value);
+
+      if (!account || !pct || !entry || !stop || entry === stop) {
+        alert("Fill account, risk %, entry and stop (entry ≠ stop).");
+        return;
+      }
+
+      const riskPerTrade = (account * pct) / 100;
+      const riskPerCoin = Math.abs(entry - stop);
+      const size = riskPerTrade / riskPerCoin;
+      const notional = size * entry;
+
+      riskDollar.textContent = `$${riskPerTrade.toFixed(2)}`;
+      riskSize.textContent = size.toFixed(4);
+      riskNotional.textContent = `$${notional.toFixed(2)}`;
+    }
+
+    riskCalcBtn.addEventListener("click", calcRisk);
+
+    // ---- IMAGE CHART ANALYSIS ----
+    const chartImageInput = document.getElementById("chartImageInput");
+    const analyzeImageBtn = document.getElementById("analyzeImageBtn");
+    const imageStatus = document.getElementById("imageStatus");
+    const chartImagePreview = document.getElementById("chartImagePreview");
+    const noPreviewText = document.getElementById("noPreviewText");
+    const imageAnalysisOutput = document.getElementById("imageAnalysisOutput");
+
+    // Preview selected image
+    chartImageInput.addEventListener("change", () => {
+      const file = chartImageInput.files[0];
+      if (!file) {
+        chartImagePreview.src = "";
+        chartImagePreview.classList.add("hidden");
+        noPreviewText.classList.remove("hidden");
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      chartImagePreview.src = url;
+      chartImagePreview.classList.remove("hidden");
+      noPreviewText.classList.add("hidden");
+      imageStatus.textContent = `Selected: ${file.name}`;
+      imageStatus.classList.remove("text-rose-400");
+      imageStatus.classList.add("text-slate-400");
+    });
+
+    // Send image to backend
+    async function analyzeChartImage() {
+      const file = chartImageInput.files[0];
+      if (!file) {
+        imageStatus.textContent = "Please select an image first.";
+        imageStatus.classList.remove("text-emerald-400");
+        imageStatus.classList.add("text-rose-400");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      analyzeImageBtn.disabled = true;
+      analyzeImageBtn.textContent = "Analyzing...";
+      imageStatus.textContent = "Uploading image and waiting for AI analysis...";
+      imageStatus.classList.remove("text-rose-400");
+      imageStatus.classList.add("text-slate-300");
+
+      try {
+        const res = await fetch(`${apiBase}/analyze_chart_image`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) {
+          throw new Error("Server error " + res.status);
         }
 
-    prompt = """You are a professional day trader. Analyze this TRADING CHART image only.
-Respond in EXACTLY this format:
+        const data = await res.json();
+        if (!data.ok) {
+          throw new Error(data.message || "Analysis failed");
+        }
 
-AI Image Analysis
-Bias: <Bullish/Bearish/Neutral>
-Action: <BUY/SELL/HOLD>
-Entry: <price>
-Stop loss: <price>
-Take profit 1: <price>
-Take profit 2: <price>
-Risk ratio: <R:R>
-Structure: <support/resistance>
-Risks: <3 risks>"""
-
-    try:
-        response = client.chat.completions.create(
-            model="grok-beta",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        },
-                    },
-                ],
-            }],
-            max_tokens=800,
-        )
-        analysis_text = response.choices[0].message.content
-    except Exception as e:
-        print("[VISION] Error:", e)
-        analysis_text = """AI Image Analysis
-Bias: Bullish (higher highs)
-Action: BUY (72%)
-Entry: 95200
-Stop loss: 95000
-Take profit 1: 95500
-Take profit 2: 96000
-Risk ratio: 1:2.5
-Structure: BoS + FVG filled
-Risks: Liquidity grab, news dump, low volume"""
-
-    return {
-        "ok": True,
-        "filename": file.filename,
-        "analysis": analysis_text,
+        imageAnalysisOutput.textContent = data.analysis || "No analysis returned.";
+        imageStatus.textContent = "AI analysis completed.";
+        imageStatus.classList.remove("text-rose-400");
+        imageStatus.classList.add("text-emerald-400");
+      } catch (err) {
+        console.error(err);
+        imageStatus.textContent = "Error: " + err.message;
+        imageStatus.classList.remove("text-emerald-400");
+        imageStatus.classList.add("text-rose-400");
+      } finally {
+        analyzeImageBtn.disabled = false;
+        analyzeImageBtn.textContent = "Analyze chart image";
+      }
     }
 
-# -------------------------------
-# MOCK DATA (interval‑aware)
-# -------------------------------
-def _interval_step_seconds(interval: str) -> int:
-    """Return time step in seconds for each candle, based on interval string."""
-    interval = interval.lower()
-    if interval.endswith("m"):
-        minutes = int(interval[:-1])
-        return minutes * 60
-    if interval.endswith("h"):
-        hours = int(interval[:-1])
-        return hours * 3600
-    if interval.endswith("d"):
-        days = int(interval[:-1])
-        return days * 86400
-    # default fallback
-    return 300  # 5 minutes
+    analyzeImageBtn.addEventListener("click", analyzeChartImage);
 
-def get_mock_klines(symbol: str, interval: str = "1h") -> List[List]:
-    symbol = symbol.upper()
-    current_time = int(time.time())
+    // ---- OpenAI multi-timeframe signal ----
+    async function loadOpenAiMultiTfSignal() {
+      aiSignalsOpenAiBox.innerText = "Loading AI multi‑timeframe signal...";
+      try {
+        const url = `${apiBase}/ai_multi_tf_signal/${currentSymbol}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("API error " + res.status);
+        const data = await res.json();
 
-    if "BTC" in symbol:
-        base_price = 95234.50
-    elif "ETH" in symbol:
-        base_price = 3256.78
-    else:
-        base_price = 1.2345
+        if (!data.ok) {
+          aiSignalsOpenAiBox.innerText =
+            data.analysis || "Failed to load AI signal.";
+          return;
+        }
 
-    step = _interval_step_seconds(interval)  # <<< KEY CHANGE: respects 1m / 5m / 1h
-
-    klines = []
-    for i in range(200):
-        t = current_time - (200 - i) * step
-        trend = (i - 100) * 0.15  # simple bullish trend
-        o = base_price + trend - 25
-        h = base_price + trend + 35
-        l = base_price + trend - 35
-        c = base_price + trend + (i % 4 - 2) * 8
-        v = 245 + (i % 25) * 15
-
-        klines.append(
-            [t * 1000, str(o), str(h), str(l), str(c), str(v),
-             "0", "0", "0", "0", "0", "0"]
-        )
-
-    return klines
-
-def generate_mock_signals(interval: str) -> List[str]:
-    """Simple pattern; could be adjusted per interval if you want."""
-    signals = ["HOLD"] * 200
-    # Make last part more active regardless of interval
-    for i in range(130, 200):
-        if i % 3 == 0:
-            signals[i] = "BUY"
-        elif i % 8 == 0:
-            signals[i] = "SELL"
-    return signals
-
-# -------------------------------
-# CRYPTO DATA ENDPOINT
-# -------------------------------
-@app.get("/crypto/{symbol}")
-def crypto(symbol: str, interval: str = Query("1h")):
-    print(f"[CRYPTO] {symbol.upper()} {interval}")
-
-    data = get_mock_klines(symbol, interval)
-
-    times = [int(row[0] / 1000) for row in data]
-    opens = [float(row[1]) for row in data]
-    highs = [float(row[2]) for row in data]
-    lows = [float(row[3]) for row in data]
-    closes = [float(row[4]) for row in data]
-    signals = generate_mock_signals(interval)
-
-    return {
-        "ok": True,
-        "time": times,
-        "open": opens,
-        "high": highs,
-        "low": lows,
-        "close": closes,
-        "signal": signals,
-        "interval": interval,
-        "symbol": symbol.upper(),
+        aiSignalsOpenAiBox.innerText = data.analysis || "No AI signal returned.";
+      } catch (err) {
+        console.error(err);
+        aiSignalsOpenAiBox.innerText = "Error: " + err.message;
+      }
     }
 
-# -------------------------------
-# PREDICTION ENDPOINT (AI ML)
-# -------------------------------
-@app.get("/predict/{symbol}")
-def predict(symbol: str, timeframe: str = Query("15m", regex="^(1m|5m|15m)$")):
-    return {
-        "ok": True,
-        "symbol": symbol.upper(),
-        "interval": timeframe,
-        "prediction": "BUY",
-        "p_good": 0.78,
-        "time": int(time.time()),
-    }
+    btnAiSignalsOpenAi.addEventListener("click", () => {
+      updateSymbolFromInput();
+      loadOpenAiMultiTfSignal();
+    });
 
-# -------------------------------
-# AI MULTI-TF SIGNAL
-# -------------------------------
-@app.get("/ai_multi_tf_signal/{symbol}")
-def ai_multi_tf_signal(symbol: str):
-    if client:
-        try:
-            resp = client.chat.completions.create(
-                model="grok-beta",
-                messages=[{
-                    "role": "user",
-                    "content": f"Pure technical analysis for {symbol}: BUY, SELL, or HOLD?"
-                }],
-                max_tokens=50,
-            )
-            decision = resp.choices[0].message.content.upper()
-            if "BUY" in decision:
-                decision = "BUY"
-            elif "SELL" in decision:
-                decision = "SELL"
-            else:
-                decision = "HOLD"
-        except Exception:
-            decision = "BUY"
-    else:
-        decision = "BUY"
-
-    return {
-        "ok": True,
-        "symbol": symbol.upper(),
-        "decision": decision,
-        "confidence": 82,
-        "reason": "All timeframes aligned bullish",
-    }
-
-# -------------------------------
-# AI MASTER SIGNAL (OVERRIDES RULES)
-# -------------------------------
-@app.get("/ai_master_signal/{symbol}")
-def ai_master_signal(symbol: str, interval: str = Query("1h")):
-    """AI makes FINAL decision - overrides rule-based HOLD."""
-
-    data = get_mock_klines(symbol, interval)
-    recent_signals_full = generate_mock_signals(interval)
-    recent_signals = recent_signals_full[-10:]  # last 10 for explanation
-
-    buy_count = recent_signals.count("BUY")
-    ml_prediction = "BUY"  # your ML endpoint is always BUY for now
-    # Note: data rows are [ts_ms, open, high, low, close, ...] all as strings
-    last_close = float(data[-1][4])
-    close_10 = float(data[-10][4])
-    price_trend = last_close > close_10
-
-    if buy_count >= 3 or ml_prediction == "BUY" or price_trend:
-        final_signal = "BUY"
-        reason = f"AI Override: {buy_count}/10 BUY + ML + trend up"
-        confidence = 85
-    else:
-        final_signal = "HOLD"
-        reason = f"AI: Wait - only {buy_count}/10 BUY signals"
-        confidence = 62
-
-    if client:
-        try:
-            resp = client.chat.completions.create(
-                model="grok-beta",
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"{symbol} {interval}: Recent: {recent_signals}. "
-                        f"ML: {ml_prediction}. Price trending "
-                        f"{'up' if price_trend else 'sideways/down'}. FINAL CALL?"
-                    ),
-                }],
-                max_tokens=30,
-            )
-            grok_decision = resp.choices[0].message.content.upper()
-            if "BUY" in grok_decision:
-                final_signal = "BUY"
-                reason = "GROK AI MASTER: BUY"
-                confidence = 92
-            elif "SELL" in grok_decision:
-                final_signal = "SELL"
-                reason = "GROK AI MASTER: SELL"
-                confidence = 92
-        except Exception:
-            pass
-
-    return {
-        "ok": True,
-        "symbol": symbol.upper(),
-        "interval": interval,
-        "master_signal": final_signal,
-        "reason": reason,
-        "confidence": confidence,
-        "recent_signals": recent_signals,
-        "buy_count": buy_count,
-        "ml_prediction": ml_prediction,
-        "price_trend": price_trend,
-    }
+    // initial load
+    updateSymbolFromInput();
+    refreshSignals();
+    startAuto();
+  </script>
+</body>
+</html>
