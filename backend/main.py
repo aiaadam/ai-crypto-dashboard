@@ -1,10 +1,8 @@
 from fastapi import FastAPI, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import requests
 import os
 import base64
-import json
 import time
 from typing import List
 
@@ -15,7 +13,7 @@ from openai import OpenAI
 # -------------------------------
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.7.0",
+    version="0.7.1",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -51,7 +49,7 @@ def test_route():
     return {"msg": "this is the correct main.py"}
 
 # -------------------------------
-# Grok client + uploads dir (FIXED)
+# Grok client + uploads dir
 # -------------------------------
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
@@ -95,6 +93,7 @@ async def analyze_chart_image(file: UploadFile = File(...)):
     base64_image = encode_image_to_base64(save_path)
 
     if client is None:
+        # Mock response if Grok not available
         return {
             "ok": True,
             "filename": file.filename,
@@ -131,7 +130,12 @@ Risks: <3 risks>"""
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        },
+                    },
                 ],
             }],
             max_tokens=800,
@@ -157,58 +161,80 @@ Risks: Liquidity grab, news dump, low volume"""
     }
 
 # -------------------------------
-# MOCK DATA (Realistic prices + AI-OPTIMIZED signals)
+# MOCK DATA (interval‑aware)
 # -------------------------------
+def _interval_step_seconds(interval: str) -> int:
+    """Return time step in seconds for each candle, based on interval string."""
+    interval = interval.lower()
+    if interval.endswith("m"):
+        minutes = int(interval[:-1])
+        return minutes * 60
+    if interval.endswith("h"):
+        hours = int(interval[:-1])
+        return hours * 3600
+    if interval.endswith("d"):
+        days = int(interval[:-1])
+        return days * 86400
+    # default fallback
+    return 300  # 5 minutes
+
 def get_mock_klines(symbol: str, interval: str = "1h") -> List[List]:
     symbol = symbol.upper()
     current_time = int(time.time())
-    
+
     if "BTC" in symbol:
         base_price = 95234.50
     elif "ETH" in symbol:
         base_price = 3256.78
     else:
         base_price = 1.2345
-    
+
+    step = _interval_step_seconds(interval)  # <<< KEY CHANGE: respects 1m / 5m / 1h
+
     klines = []
     for i in range(200):
-        t = current_time - (200 - i) * 300  # 5min spacing
-        trend = (i - 100) * 0.15  # Bullish trend
+        t = current_time - (200 - i) * step
+        trend = (i - 100) * 0.15  # simple bullish trend
         o = base_price + trend - 25
         h = base_price + trend + 35
         l = base_price + trend - 35
         c = base_price + trend + (i % 4 - 2) * 8
         v = 245 + (i % 25) * 15
-        
-        klines.append([t*1000, str(o), str(h), str(l), str(c), str(v), "0","0","0","0","0","0"])
-    
+
+        klines.append(
+            [t * 1000, str(o), str(h), str(l), str(c), str(v),
+             "0", "0", "0", "0", "0", "0"]
+        )
+
     return klines
 
 def generate_mock_signals(interval: str) -> List[str]:
-    """AI-optimized: More BUY signals in recent candles"""
+    """Simple pattern; could be adjusted per interval if you want."""
     signals = ["HOLD"] * 200
-    # AI pushes more BUY signals recently
-    for i in range(130, 200):  # Last 70 candles = bullish
-        if i % 3 == 0: signals[i] = "BUY"  # Every 3rd = BUY
-        elif i % 8 == 0: signals[i] = "SELL"  # Rare SELL
+    # Make last part more active regardless of interval
+    for i in range(130, 200):
+        if i % 3 == 0:
+            signals[i] = "BUY"
+        elif i % 8 == 0:
+            signals[i] = "SELL"
     return signals
 
 # -------------------------------
-# CRYPTO DATA ENDPOINT (AI-ENHANCED)
+# CRYPTO DATA ENDPOINT
 # -------------------------------
 @app.get("/crypto/{symbol}")
 def crypto(symbol: str, interval: str = Query("1h")):
     print(f"[CRYPTO] {symbol.upper()} {interval}")
-    
+
     data = get_mock_klines(symbol, interval)
-    
-    times = [int(row[0]/1000) for row in data]
+
+    times = [int(row[0] / 1000) for row in data]
     opens = [float(row[1]) for row in data]
     highs = [float(row[2]) for row in data]
     lows = [float(row[3]) for row in data]
     closes = [float(row[4]) for row in data]
     signals = generate_mock_signals(interval)
-    
+
     return {
         "ok": True,
         "time": times,
@@ -230,8 +256,8 @@ def predict(symbol: str, timeframe: str = Query("15m", regex="^(1m|5m|15m)$")):
         "ok": True,
         "symbol": symbol.upper(),
         "interval": timeframe,
-        "prediction": "BUY",  # AI ML always bullish
-        "p_good": 0.78,  # High confidence
+        "prediction": "BUY",
+        "p_good": 0.78,
         "time": int(time.time()),
     }
 
@@ -245,45 +271,49 @@ def ai_multi_tf_signal(symbol: str):
             resp = client.chat.completions.create(
                 model="grok-beta",
                 messages=[{
-                    "role": "user", 
+                    "role": "user",
                     "content": f"Pure technical analysis for {symbol}: BUY, SELL, or HOLD?"
                 }],
                 max_tokens=50,
             )
             decision = resp.choices[0].message.content.upper()
-            if "BUY" in decision: decision = "BUY"
-            elif "SELL" in decision: decision = "SELL"
-            else: decision = "HOLD"
-        except:
+            if "BUY" in decision:
+                decision = "BUY"
+            elif "SELL" in decision:
+                decision = "SELL"
+            else:
+                decision = "HOLD"
+        except Exception:
             decision = "BUY"
     else:
         decision = "BUY"
-    
+
     return {
         "ok": True,
         "symbol": symbol.upper(),
         "decision": decision,
-        "confidence": 82,  # AI confidence
+        "confidence": 82,
         "reason": "All timeframes aligned bullish",
     }
 
 # -------------------------------
-# 🔥 NEW AI MASTER SIGNAL (OVERRIDES RULES)
+# AI MASTER SIGNAL (OVERRIDES RULES)
 # -------------------------------
 @app.get("/ai_master_signal/{symbol}")
 def ai_master_signal(symbol: str, interval: str = Query("1h")):
-    """AI makes FINAL decision - overrides rule-based HOLD"""
-    
-    # Get recent data
+    """AI makes FINAL decision - overrides rule-based HOLD."""
+
     data = get_mock_klines(symbol, interval)
-    recent_signals = generate_mock_signals(interval)[-10:]  # Last 10 candles
-    
-    # AI Analysis
+    recent_signals_full = generate_mock_signals(interval)
+    recent_signals = recent_signals_full[-10:]  # last 10 for explanation
+
     buy_count = recent_signals.count("BUY")
-    ml_prediction = "BUY"  # From ML model
-    price_trend = data[-1][4] > data[-10][4]  # Last close > 10th close
-    
-    # AI Decision Logic
+    ml_prediction = "BUY"  # your ML endpoint is always BUY for now
+    # Note: data rows are [ts_ms, open, high, low, close, ...] all as strings
+    last_close = float(data[-1][4])
+    close_10 = float(data[-10][4])
+    price_trend = last_close > close_10
+
     if buy_count >= 3 or ml_prediction == "BUY" or price_trend:
         final_signal = "BUY"
         reason = f"AI Override: {buy_count}/10 BUY + ML + trend up"
@@ -292,15 +322,18 @@ def ai_master_signal(symbol: str, interval: str = Query("1h")):
         final_signal = "HOLD"
         reason = f"AI: Wait - only {buy_count}/10 BUY signals"
         confidence = 62
-    
-    # Grok final override
+
     if client:
         try:
             resp = client.chat.completions.create(
                 model="grok-beta",
                 messages=[{
                     "role": "user",
-                    "content": f"{symbol} {interval}: Recent: {recent_signals[-5:]}. ML: BUY. Price trending up. FINAL CALL?",
+                    "content": (
+                        f"{symbol} {interval}: Recent: {recent_signals}. "
+                        f"ML: {ml_prediction}. Price trending "
+                        f"{'up' if price_trend else 'sideways/down'}. FINAL CALL?"
+                    ),
                 }],
                 max_tokens=30,
             )
@@ -309,18 +342,22 @@ def ai_master_signal(symbol: str, interval: str = Query("1h")):
                 final_signal = "BUY"
                 reason = "GROK AI MASTER: BUY"
                 confidence = 92
-        except:
+            elif "SELL" in grok_decision:
+                final_signal = "SELL"
+                reason = "GROK AI MASTER: SELL"
+                confidence = 92
+        except Exception:
             pass
-    
+
     return {
         "ok": True,
         "symbol": symbol.upper(),
         "interval": interval,
-        "master_signal": final_signal,  # ← FRONTEND USES THIS
+        "master_signal": final_signal,
         "reason": reason,
         "confidence": confidence,
         "recent_signals": recent_signals,
         "buy_count": buy_count,
         "ml_prediction": ml_prediction,
-        "price_trend": price_trend
+        "price_trend": price_trend,
     }
