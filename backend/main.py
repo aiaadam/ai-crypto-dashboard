@@ -294,3 +294,59 @@ def generate_signal(row, interval: str = "1h"):
         and macd_bull
     ):  # ← ONLY ADD ) + :
         return "BUY"
+
+# -------------------------------
+# AI signal endpoint (BUY/SELL/HOLD)
+# -------------------------------
+
+@app.get("/ai_signal/{symbol}/{timeframe}")
+def ai_signal(symbol: str, timeframe: str = "15m"):
+    """
+    Returns a simple AI-style signal (BUY/SELL/HOLD) for the given symbol + timeframe.
+    Currently uses your rule-based logic; OpenAI can be added on top later.
+    """
+    # 1) Fetch candles
+    klines = get_klines(symbol, interval=timeframe, limit=200)
+    if not klines:
+        return {"prediction": "HOLD", "reason": "No data from provider"}
+
+    # 2) Build DataFrame
+    df = pd.DataFrame(klines, columns=[
+        "time", "open", "high", "low", "close", "volume",
+        "x1", "x2", "x3", "x4", "x5", "x6",
+    ])
+    df["close"] = df["close"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["volume"] = df["volume"].astype(float)
+
+    # 3) Indicators (same as your rule engine)
+    df["ema_50"] = ta.trend.EMAIndicator(close=df["close"], window=50).ema_indicator()
+    df["ema_200"] = ta.trend.EMAIndicator(close=df["close"], window=200).ema_indicator()
+    df["rsi"] = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi()
+    macd_ind = ta.trend.MACD(close=df["close"])
+    df["macd"] = macd_ind.macd()
+    df["macd_signal"] = macd_ind.macd_signal()
+    bb = ta.volatility.BollingerBands(close=df["close"], window=20, window_dev=2)
+    df["bb_high"] = bb.bollinger_hband()
+    df["bb_low"] = bb.bollinger_lband()
+    atr = ta.volatility.AverageTrueRange(
+        high=df["high"], low=df["low"], close=df["close"], window=14
+    ).average_true_range()
+    df["atr_perc"] = atr / df["close"]
+
+    # 4) Clean + take last row
+    df = df.dropna()
+    if df.empty:
+        return {"prediction": "HOLD", "reason": "Not enough data for indicators"}
+
+    last_row = df.iloc[-1]
+
+    # 5) Get rule-based signal
+    rule_signal = generate_signal(last_row, interval=timeframe)
+
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "prediction": rule_signal,  # BUY / SELL / HOLD
+    }
