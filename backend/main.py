@@ -8,6 +8,7 @@ import joblib
 import os
 import shutil
 import base64
+import json
 
 from openai import OpenAI
 
@@ -17,7 +18,7 @@ from openai import OpenAI
 
 app = FastAPI(
     title="AI Crypto Dashboard",
-    version="0.6.0",
+    version="0.7.0",
     docs_url="/docs",
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -53,16 +54,19 @@ def test_route():
     return {"msg": "this is the correct main.py"}
 
 # -------------------------------
-# OpenAI vision client + uploads dir
+# Grok client + uploads dir
 # -------------------------------
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 client = None
-if OPENAI_API_KEY:
-    client = OpenAI(api_key=OPENAI_API_KEY)
+if GROK_API_KEY:
+    client = OpenAI(
+        api_key=GROK_API_KEY,
+        base_url="https://api.x.ai/v1",
+    )
 else:
-    print("WARNING: OPENAI_API_KEY is not set - vision endpoint will be disabled.")
+    print("WARNING: GROK_API_KEY not set - AI endpoints disabled")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -80,12 +84,10 @@ async def analyze_chart_image(
     file: UploadFile = File(...),
 ):
     """
-    Accepts an uploaded chart image and returns REAL AI analysis text
-    using OpenAI GPT-4o vision. Gives bias, action (BUY/SELL/HOLD),
-    entry, SL, TP1, TP2, R:R, structure and risks.
+    Accepts an uploaded chart image and returns AI analysis text
+    using Grok vision via OpenAI-compatible client.
     """
 
-    # read + size check
     contents = await file.read()
     size_kb = len(contents) / 1024
 
@@ -95,21 +97,18 @@ async def analyze_chart_image(
             "message": "Image too large (max ~4MB)",
         }
 
-    # save to disk
     safe_name = file.filename.replace(" ", "_")
     save_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(save_path, "wb") as buffer:
         buffer.write(contents)
 
-    # encode to base64 for OpenAI
     base64_image = encode_image_to_base64(save_path)
 
-    # if no API key, fail nicely
-    if not OPENAI_API_KEY or client is None:
+    if client is None:
         return {
             "ok": False,
             "filename": file.filename,
-            "analysis": "Server missing OPENAI_API_KEY. Contact admin.",
+            "analysis": "Server missing GROK_API_KEY. Contact admin.",
         }
 
     prompt = """
@@ -136,7 +135,7 @@ If you cannot read prices, say: 'Cannot read price scale clearly, no exact level
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="grok-beta",
             messages=[
                 {
                     "role": "user",
@@ -271,7 +270,6 @@ def generate_signal(row, interval: str = "1h"):
     macd_bear = macd < macd_signal
     macd_diff = macd - macd_signal
 
-    # TUNED: looser thresholds on 1m to reduce HOLD spam
     if interval == "1m":
         macd_strong = 0.0002
         min_vol = 0.0003
@@ -327,7 +325,6 @@ def generate_signal(row, interval: str = "1h"):
             return "HOLD"
         return "SELL"
 
-    # Extra 1m fallback rules to reduce HOLD spam
     if interval == "1m":
         if 50 <= rsi <= 60 and ema_50 > ema_200:
             return "BUY"
@@ -517,10 +514,6 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def map_proba_to_signal(p_good: float, timeframe: str) -> str:
-    """
-    MEDIUM RISK DEFAULT - no risk parameter needed
-    p_good = probability this is a good long (TP before SL).
-    """
     timeframe = timeframe.lower()
 
     if timeframe == "1m":
@@ -642,8 +635,6 @@ def predict(
 ):
     """
     AI-based prediction using timeframe-specific TP/SL models.
-    NO RISK PARAMETER - uses MEDIUM risk defaults only
-    timeframe: "1m" | "5m" | "15m"
     """
     bundle = ml_bundles.get(timeframe)
     if not bundle:
@@ -721,7 +712,6 @@ def predict(
     final_signal = map_proba_to_signal(p_good, timeframe)
     final_signal = smc_overlay(df, final_signal, p_good)
 
-    # extra 1m behaviour: avoid buying dumps, sell earlier on drops
     if timeframe == "1m":
         last = df.tail(3)
         price_trend = last["close"].iloc[-1] - last["close"].iloc[0]
@@ -748,4 +738,169 @@ def predict(
         "prediction": final_signal,
         "p_good": p_good,
         "time": int(latest["time"]),
+    }
+
+# -------------------------------
+# Multi-timeframe summary + Grok AI decision
+# -------------------------------
+
+MULTI_TF_LIST = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+def build_tf_summary(symbol: str):
+    symbol = symbol.upper()
+    lines = []
+
+    for tf in MULTI_TF_LIST:
+        raw = get_klines(symbol, interval=tf, limit=200)
+        if not raw:
+            lines.append(f"{tf}: no data.")
+            continue
+
+        df = pd.DataFrame(
+            raw,
+            columns=[
+                "time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "_1",
+                "_2",
+                "_3",
+                "_4",
+                "_5",
+                "_6",
+            ],
+        )
+
+        df["time"] = df["time"] // 1000
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+
+        df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+        df["ema_20"] = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
+        df["ema_50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+
+        macd_ind = ta.trend.MACD(
+            close=df["close"],
+            window_slow=26,
+            window_fast=12,
+            window_sign=9,
+        )
+        df["macd"] = macd_ind.macd()
+        df["macd_signal"] = macd_ind.macd_signal()
+
+        df = df.dropna().reset_index(drop=True)
+        if len(df) == 0:
+            lines.append(f"{tf}: not enough candles.")
+            continue
+
+        last = df.iloc[-1]
+        price = last["close"]
+        rsi = last["rsi"]
+        ema20 = last["ema_20"]
+        ema50 = last["ema_50"]
+        macd_val = last["macd"]
+        macd_sig = last["macd_signal"]
+
+        trend = "uptrend" if ema20 > ema50 else "downtrend" if ema20 < ema50 else "flat"
+        macd_state = "bullish" if macd_val > macd_sig else "bearish"
+
+        line = (
+            f"{tf}: close={price:.2f}, rsi={rsi:.1f}, "
+            f"trend={trend}, macd={macd_state}."
+        )
+        lines.append(line)
+
+    summary_text = "\n".join(lines)
+    return summary_text
+
+@app.get("/ai_multi_tf_signal/{symbol}")
+def ai_multi_tf_signal(symbol: str):
+    """
+    Grok-powered multi-timeframe BUY/HOLD/SELL decision
+    used by the 'Sync AI with chart' button.
+    """
+    if client is None:
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "decision": "HOLD",
+            "reason": "Server missing GROK_API_KEY.",
+        }
+
+    summary = build_tf_summary(symbol)
+    if not summary.strip():
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "decision": "HOLD",
+            "reason": "No multi-timeframe data.",
+        }
+
+    system_prompt = """
+You are an advanced crypto trading assistant.
+You receive multi-timeframe data (1m, 5m, 15m, 1h, 4h, 1d) for a symbol.
+Return ONE clear technical action: BUY, SELL, or HOLD.
+
+You MUST respond in EXACT JSON:
+
+{
+  "decision": "BUY" | "SELL" | "HOLD",
+  "confidence": "<number between 0 and 100>",
+  "reason": "<one short sentence>"
+}
+"""
+
+    user_prompt = f"Symbol: {symbol.upper()}\n\nMulti-timeframe summary:\n{summary}"
+
+    try:
+        resp = client.chat.completions.create(
+            model="grok-beta",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=150,
+            temperature=0.4,
+        )
+        content = resp.choices[0].message.content or ""
+    except Exception as e:
+        print("[AI_MULTI_TF] Grok error:", e)
+        return {
+            "ok": False,
+            "symbol": symbol.upper(),
+            "decision": "HOLD",
+            "reason": f"Error talking to Grok: {e}",
+        }
+
+    try:
+        data = json.loads(content)
+        decision = str(data.get("decision", "HOLD")).upper()
+        confidence = data.get("confidence")
+        reason = str(data.get("reason", ""))
+    except Exception:
+        text = content.upper()
+        if "BUY" in text and "SELL" not in text:
+            decision = "BUY"
+        elif "SELL" in text and "BUY" not in text:
+            decision = "SELL"
+        else:
+            decision = "HOLD"
+        confidence = None
+        reason = content[:200]
+
+    if decision not in ("BUY", "SELL", "HOLD"):
+        decision = "HOLD"
+
+    return {
+        "ok": True,
+        "symbol": symbol.upper(),
+        "decision": decision,
+        "confidence": confidence,
+        "reason": reason,
     }
