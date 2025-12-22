@@ -5,3 +5,5 @@ ta
 joblib
 requests
 python-multipart
+openai
+pillow
