@@ -57,12 +57,18 @@ GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 client = None
 if GROK_API_KEY:
-    client = OpenAI(
-        api_key=GROK_API_KEY,
-        base_url="https://api.x.ai/v1",
-    )
+    try:
+        client = OpenAI(
+            api_key=GROK_API_KEY,
+            base_url="https://api.x.ai/v1",
+            http_client=None  # FIXES proxies error
+        )
+        print("GROK: Connected successfully!")
+    except Exception as e:
+        print(f"GROK: Connection failed: {e}")
+        client = None
 else:
-    print("WARNING: GROK_API_KEY not set - AI endpoints disabled")
+    print("GROK: API key not set")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -313,3 +319,4 @@ Return ONE clear technical action: BUY, SELL, or HOLD in EXACT JSON:
         "confidence": confidence,
         "reason": reason,
     }
+
